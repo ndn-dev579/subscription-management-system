@@ -1,0 +1,64 @@
+# =========================
+
+# Environment Variables
+
+# =========================
+
+.env
+.env.*
+!.env.example
+
+# =========================
+
+# React / Node.js
+
+# =========================
+
+node_modules/
+dist/
+build/
+npm-debug.log*
+
+# =========================
+
+# Python / Django
+
+# =========================
+
+**pycache**/
+*.py[cod]
+venv/
+.venv/
+env/
+
+# Django generated files
+
+staticfiles/
+
+# =========================
+
+# IDE
+
+# =========================
+
+.vscode/
+.idea/
+
+# =========================
+
+# Operating System
+
+# =========================
+
+.DS_Store
+Thumbs.db
+
+# =========================
+
+# Testing
+
+# =========================
+
+.coverage
+htmlcov/
+.pytest_cache/
