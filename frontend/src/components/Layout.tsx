@@ -1,6 +1,8 @@
 import { NavLink, Outlet } from 'react-router-dom';
-import { useStore } from '../store/store';
-import type { Role } from '../types';
+import type { AuthUser } from '../contexts/AuthContext';
+import { useAuth } from '../contexts/AuthContext';
+
+type Role = AuthUser['role'];
 
 interface Item {
   to: string;
@@ -31,6 +33,7 @@ const NAV: Item[] = [
   },
   { to: '/payments', label: 'Payments', roles: TEAM, group: 'Billing' },
   { to: '/people', label: 'People', roles: TEAM, group: 'Billing' },
+  { to: '/quotations', label: 'Quotations', roles: TEAM, group: 'Billing' },
   { to: '/products', label: 'Products', roles: ['admin'], group: 'Catalogue' },
   { to: '/plans', label: 'Plans', roles: ['admin'], group: 'Catalogue' },
   { to: '/templates', label: 'Quotation templates', roles: ['admin'], group: 'Catalogue' },
@@ -39,7 +42,7 @@ const NAV: Item[] = [
 ];
 
 export default function Layout() {
-  const { me, logout } = useStore();
+  const { me, logout } = useAuth();
   if (!me) return null;
   const items = NAV.filter((n) => n.roles.includes(me.role));
   return (
@@ -66,7 +69,7 @@ export default function Layout() {
             {me.role}
             {me.company ? ` · ${me.company}` : ''}
           </span>
-          <button className="btn btn-ghost" onClick={logout}>
+          <button className="btn btn-ghost" type="button" onClick={() => void logout()}>
             Sign out
           </button>
         </div>

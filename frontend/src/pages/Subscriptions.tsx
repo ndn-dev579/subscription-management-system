@@ -1,51 +1,106 @@
+import { useMutation, useQuery } from '@tanstack/react-query';
+import type { AxiosError } from 'axios';
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import SubscriptionForm from '../components/SubscriptionForm';
-import { PageHead, Pager, StatusBadge } from '../components/ui';
-import { recurringAmount } from '../lib/billing';
-import { formatDate, formatMoney, who } from '../lib/format';
+import { ErrorBanner, PageHead, Pager, StatusBadge } from '../components/ui';
+import { useAuth } from '../contexts/AuthContext';
+import { subscriptionsApi } from '../lib/api';
+import { formatDate, formatMoney } from '../lib/format';
 import { usePaged } from '../lib/hooks';
-import { useStore } from '../store/store';
-import { SUB_FLOW } from '../types';
+import { queryClient } from '../lib/queryClient';
+
+interface SubLine {
+  id: string;
+  product_name: string;
+  quantity: number;
+  unit_price: string;
+}
+
+interface Subscription {
+  id: string;
+  number: string;
+  customer_name: string;
+  customer_id: string;
+  plan_name: string;
+  plan_id: string;
+  billing_interval: string;
+  status: string;
+  start_date: string;
+  end_date: string | null;
+  next_billing_date: string | null;
+  total_per_period: string;
+  lines: SubLine[];
+}
+
+const SUB_STATUSES = ['active', 'paused', 'closed', 'draft'];
+
+function apiErr(err: unknown): string {
+  const e = err as AxiosError<{ detail?: string }>;
+  return e.response?.data?.detail ?? (err as Error).message;
+}
 
 export default function Subscriptions() {
-  const { scope, by, me } = useStore();
+  const { me } = useAuth();
   const [q, setQ] = useState('');
   const [status, setStatus] = useState('');
-  const [planId, setPlanId] = useState('');
-  const [creating, setCreating] = useState(false);
   const isCustomer = me?.role === 'customer';
 
+  const { data, isLoading, error } = useQuery({
+    queryKey: ['subscriptions'],
+    queryFn: () =>
+      subscriptionsApi.list().then((r) => {
+        const d = r.data;
+        return (d.results ?? d) as Subscription[];
+      }),
+  });
+
+  const pauseMutation = useMutation({
+    mutationFn: (id: string) => subscriptionsApi.pause(id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['subscriptions'] }),
+  });
+  const resumeMutation = useMutation({
+    mutationFn: (id: string) => subscriptionsApi.resume(id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['subscriptions'] }),
+  });
+  const closeMutation = useMutation({
+    mutationFn: (id: string) => subscriptionsApi.close(id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['subscriptions'] }),
+  });
+
+  const [actionError, setActionError] = useState('');
+
   const rows = useMemo(() => {
+    const all = data ?? [];
     const needle = q.trim().toLowerCase();
-    return scope.subscriptions
+    return all
       .filter((s) => {
         if (status && s.status !== status) return false;
-        if (planId && s.planId !== planId) return false;
         if (!needle) return true;
-        const u = by.user.get(s.customerId);
         return (
-          s.number.toLowerCase().includes(needle) ||
-          (u?.name ?? '').toLowerCase().includes(needle) ||
-          (u?.company ?? '').toLowerCase().includes(needle)
+          s.number.toLowerCase().includes(needle) || s.customer_name.toLowerCase().includes(needle)
         );
       })
       .sort((a, b) => b.number.localeCompare(a.number));
-  }, [scope.subscriptions, by, q, status, planId]);
+  }, [data, q, status]);
+
   const pg = usePaged(rows);
+
+  const act = async (fn: () => Promise<unknown>) => {
+    setActionError('');
+    try {
+      await fn();
+    } catch (err) {
+      setActionError(apiErr(err));
+    }
+  };
 
   return (
     <>
       <PageHead
         title={isCustomer ? 'My subscriptions' : 'Subscriptions'}
-        sub={`${scope.subscriptions.length.toLocaleString()} total`}
-      >
-        {!isCustomer && (
-          <button className="btn btn-primary" onClick={() => setCreating(true)}>
-            + New subscription
-          </button>
-        )}
-      </PageHead>
+        sub={`${(data ?? []).length.toLocaleString()} total`}
+      />
+      {actionError && <ErrorBanner error={actionError} />}
       <div className="toolbar">
         <input
           placeholder="Search number or customer…"
@@ -54,21 +109,19 @@ export default function Subscriptions() {
         />
         <select value={status} onChange={(e) => setStatus(e.target.value)}>
           <option value="">All statuses</option>
-          {SUB_FLOW.map((s) => (
+          {SUB_STATUSES.map((s) => (
             <option key={s}>{s}</option>
-          ))}
-        </select>
-        <select value={planId} onChange={(e) => setPlanId(e.target.value)}>
-          <option value="">All plans</option>
-          {[...by.plan.values()].map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-            </option>
           ))}
         </select>
       </div>
       <div className="card table-wrap">
-        {rows.length === 0 ? (
+        {isLoading ? (
+          <p className="muted" style={{ padding: '1rem' }}>
+            Loading…
+          </p>
+        ) : error ? (
+          <ErrorBanner error={(error as Error).message} />
+        ) : rows.length === 0 ? (
           <p className="empty">No subscriptions match.</p>
         ) : (
           <table>
@@ -78,41 +131,72 @@ export default function Subscriptions() {
                 {!isCustomer && <th>Customer</th>}
                 <th>Plan</th>
                 <th>Start</th>
-                <th>Expiry</th>
-                <th className="num">Recurring</th>
+                <th>Next billing</th>
+                <th className="num">Per period</th>
                 <th>Status</th>
+                {!isCustomer && <th />}
               </tr>
             </thead>
             <tbody>
-              {pg.rows.map((s) => {
-                const plan = by.plan.get(s.planId);
-                return (
-                  <tr key={s.id}>
-                    <td>
-                      <Link to={`/subscriptions/${s.id}`}>
-                        <strong>{s.number}</strong>
-                      </Link>
+              {pg.rows.map((s) => (
+                <tr key={s.id}>
+                  <td>
+                    <Link to={`/subscriptions/${s.id}`}>
+                      <strong>{s.number}</strong>
+                    </Link>
+                  </td>
+                  {!isCustomer && <td>{s.customer_name}</td>}
+                  <td>{s.plan_name}</td>
+                  <td>{formatDate(s.start_date)}</td>
+                  <td>{s.next_billing_date ? formatDate(s.next_billing_date) : '—'}</td>
+                  <td className="num">
+                    {formatMoney(Number(s.total_per_period))}{' '}
+                    <span className="muted small">/ {s.billing_interval}</span>
+                  </td>
+                  <td>
+                    <StatusBadge status={s.status} />
+                  </td>
+                  {!isCustomer && (
+                    <td className="actions">
+                      {s.status === 'active' && (
+                        <button
+                          type="button"
+                          className="btn btn-ghost"
+                          onClick={() => act(() => pauseMutation.mutateAsync(s.id))}
+                        >
+                          Pause
+                        </button>
+                      )}
+                      {s.status === 'paused' && (
+                        <button
+                          type="button"
+                          className="btn btn-ghost"
+                          onClick={() => act(() => resumeMutation.mutateAsync(s.id))}
+                        >
+                          Resume
+                        </button>
+                      )}
+                      {s.status !== 'closed' && (
+                        <button
+                          type="button"
+                          className="btn btn-danger"
+                          onClick={() =>
+                            window.confirm(`Close subscription ${s.number}?`) &&
+                            act(() => closeMutation.mutateAsync(s.id))
+                          }
+                        >
+                          Close
+                        </button>
+                      )}
                     </td>
-                    {!isCustomer && <td>{who(by.user.get(s.customerId))}</td>}
-                    <td>{plan?.name ?? '—'}</td>
-                    <td>{formatDate(s.startDate)}</td>
-                    <td>{formatDate(s.expiryDate)}</td>
-                    <td className="num">
-                      {formatMoney(recurringAmount(s, plan))}{' '}
-                      <span className="muted small">/ {plan?.period}</span>
-                    </td>
-                    <td>
-                      <StatusBadge status={s.status} />
-                    </td>
-                  </tr>
-                );
-              })}
+                  )}
+                </tr>
+              ))}
             </tbody>
           </table>
         )}
       </div>
       <Pager {...pg} />
-      {creating && <SubscriptionForm onClose={() => setCreating(false)} />}
     </>
   );
 }

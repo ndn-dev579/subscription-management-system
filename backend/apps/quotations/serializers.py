@@ -2,17 +2,20 @@ from rest_framework import serializers
 from .models import QuotationTemplate, QuotationTemplateLine, Quotation, QuotationLine
 
 class QuotationTemplateLineSerializer(serializers.ModelSerializer):
+    product_name = serializers.CharField(source='product.name', read_only=True, default='')
+
     class Meta:
         model = QuotationTemplateLine
-        fields = ['id', 'product', 'variant', 'qty', 'unit_price']
+        fields = ['id', 'product', 'product_name', 'variant', 'qty', 'unit_price']
         read_only_fields = ['id']
 
 class QuotationTemplateSerializer(serializers.ModelSerializer):
     lines = QuotationTemplateLineSerializer(many=True, required=False)
+    plan_name = serializers.CharField(source='plan.name', read_only=True, default='')
 
     class Meta:
         model = QuotationTemplate
-        fields = ['id', 'name', 'plan', 'validity_days', 'lines', 'created_at', 'updated_at']
+        fields = ['id', 'name', 'plan', 'plan_name', 'validity_days', 'lines', 'created_at', 'updated_at']
         read_only_fields = ['id', 'created_at', 'updated_at']
 
     def create(self, validated_data):
@@ -23,13 +26,17 @@ class QuotationTemplateSerializer(serializers.ModelSerializer):
         return template
 
 class QuotationLineSerializer(serializers.ModelSerializer):
+    product_name = serializers.CharField(source='product.name', read_only=True, default='')
+
     class Meta:
         model = QuotationLine
-        fields = ['id', 'product', 'variant', 'qty', 'unit_price', 'tax']
+        fields = ['id', 'product', 'product_name', 'variant', 'qty', 'unit_price', 'tax']
         read_only_fields = ['id']
 
 class QuotationSerializer(serializers.ModelSerializer):
     lines = QuotationLineSerializer(many=True, required=False)
+    customer_name = serializers.CharField(source='customer.company_name', read_only=True, default='')
+    plan_name = serializers.CharField(source='plan.name', read_only=True, default='')
 
     class Meta:
         model = Quotation
@@ -37,7 +44,9 @@ class QuotationSerializer(serializers.ModelSerializer):
             'id',
             'quotation_number',
             'customer',
+            'customer_name',
             'plan',
+            'plan_name',
             'template',
             'status',
             'start_date',
@@ -57,4 +66,3 @@ class QuotationSerializer(serializers.ModelSerializer):
         for l in lines_data:
             QuotationLine.objects.create(quotation=quotation, **l)
         return quotation
-

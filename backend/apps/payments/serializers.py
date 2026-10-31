@@ -2,13 +2,16 @@ from rest_framework import serializers
 from .models import Payment, PaymentAllocation
 
 class PaymentAllocationSerializer(serializers.ModelSerializer):
+    invoice_number = serializers.CharField(source='invoice.invoice_number', read_only=True, default='')
+
     class Meta:
         model = PaymentAllocation
-        fields = ['id', 'invoice', 'amount', 'created_at']
+        fields = ['id', 'invoice', 'invoice_number', 'amount', 'created_at']
         read_only_fields = ['id', 'created_at']
 
 class PaymentSerializer(serializers.ModelSerializer):
     allocations = PaymentAllocationSerializer(many=True, required=False)
+    customer_name = serializers.CharField(source='customer.company_name', read_only=True, default='')
 
     class Meta:
         model = Payment
@@ -16,6 +19,7 @@ class PaymentSerializer(serializers.ModelSerializer):
             'id',
             'payment_number',
             'customer',
+            'customer_name',
             'amount',
             'currency',
             'method',
@@ -45,4 +49,3 @@ class PaymentSerializer(serializers.ModelSerializer):
         for alloc in allocations_data:
             PaymentAllocation.objects.create(payment=payment, **alloc)
         return payment
-

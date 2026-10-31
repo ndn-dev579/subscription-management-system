@@ -227,7 +227,7 @@ export const paymentsApi = {
 };
 
 export const reportsApi = {
-  dashboard: () => apiClient.get('/reports/dashboard/'),
+  dashboard: (params?: Record<string, unknown>) => apiClient.get('/reports/dashboard/', { params }),
   revenue: (params?: Record<string, unknown>) => apiClient.get('/reports/revenue/', { params }),
   subscriptions: (params?: Record<string, unknown>) =>
     apiClient.get('/reports/subscriptions/', { params }),

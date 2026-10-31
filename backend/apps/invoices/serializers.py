@@ -20,6 +20,8 @@ class InvoiceLineSerializer(serializers.ModelSerializer):
 
 class InvoiceSerializer(serializers.ModelSerializer):
     lines = InvoiceLineSerializer(many=True, read_only=True)
+    customer_name = serializers.CharField(source='customer.company_name', read_only=True, default='')
+    subscription_number = serializers.CharField(source='subscription.subscription_number', read_only=True, default='')
 
     class Meta:
         model = Invoice
@@ -27,7 +29,9 @@ class InvoiceSerializer(serializers.ModelSerializer):
             'id',
             'invoice_number',
             'customer',
+            'customer_name',
             'subscription',
+            'subscription_number',
             'period_start',
             'period_end',
             'issue_date',
@@ -53,4 +57,3 @@ class InvoiceSerializer(serializers.ModelSerializer):
             'created_at',
             'updated_at',
         ]
-

@@ -1,99 +1,205 @@
+import { useMutation, useQuery } from '@tanstack/react-query';
+import type { AxiosError } from 'axios';
 import { type FormEvent, useState } from 'react';
-import { Badge, ErrorBanner, Field, Modal, PageHead, StatusBadge } from '../components/ui';
-import { removeItem, renewPlan, savePlan, setPlanStatus } from '../lib/actions';
-import { effectivePlanStatus } from '../lib/billing';
-import { addPeriod, formatDate, formatMoney, todayISO, uid } from '../lib/format';
-import { useAction } from '../lib/hooks';
-import { useStore } from '../store/store';
-import { PERIODS, type Period, type Plan } from '../types';
+import { Badge, ErrorBanner, Field, Modal, PageHead } from '../components/ui';
+import { plansApi, taxesApi } from '../lib/api';
+import { formatDate, formatMoney } from '../lib/format';
+import { queryClient } from '../lib/queryClient';
 
-const OPTIONS = [
-  ['autoClose', 'Close automatically at end date'],
-  ['closable', 'Can be closed early'],
-  ['pausable', 'Can be paused'],
-  ['renewable', 'Can be renewed'],
-] as const;
+interface Plan {
+  id: string;
+  name: string;
+  price: string | number;
+  billing_interval: 'daily' | 'weekly' | 'monthly' | 'yearly';
+  minimum_quantity: number;
+  start_date: string;
+  end_date: string | null;
+  tax: string | null;
+  auto_close_on_end: boolean;
+  allow_early_close: boolean;
+  allow_pause: boolean;
+  allow_renewal: boolean;
+  is_active: boolean;
+}
 
-function PlanForm({ initial, onClose }: { initial: Plan; onClose: () => void }) {
-  const { db, update } = useStore();
-  const { error, run } = useAction();
-  const [f, setF] = useState<Plan>(initial);
-  const set = <K extends keyof Plan>(k: K, v: Plan[K]) => setF((x) => ({ ...x, [k]: v }));
+interface TaxRule {
+  id: string;
+  name: string;
+  rate: number;
+}
+
+const INTERVALS = ['daily', 'weekly', 'monthly', 'yearly'] as const;
+
+function PlanForm({
+  initial,
+  onClose,
+  taxes,
+}: {
+  initial: Plan | null;
+  onClose: () => void;
+  taxes: TaxRule[];
+}) {
+  const [f, setF] = useState({
+    name: initial?.name ?? '',
+    price: initial ? Number(initial.price) : 0,
+    billing_interval: initial?.billing_interval ?? 'monthly',
+    minimum_quantity: initial?.minimum_quantity ?? 1,
+    start_date: initial?.start_date ?? new Date().toISOString().slice(0, 10),
+    end_date: initial?.end_date ?? '',
+    tax: initial?.tax ?? '',
+    auto_close_on_end: initial?.auto_close_on_end ?? false,
+    allow_early_close: initial?.allow_early_close ?? true,
+    allow_pause: initial?.allow_pause ?? true,
+    allow_renewal: initial?.allow_renewal ?? true,
+  });
+  const [error, setError] = useState('');
+
+  const saveMutation = useMutation({
+    mutationFn: (payload: Record<string, unknown>) => {
+      if (initial?.id) {
+        return plansApi.update(initial.id, payload);
+      }
+      return plansApi.create(payload);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['plans'] });
+      onClose();
+    },
+    onError: (err) => {
+      const e = err as AxiosError<{ detail?: string }>;
+      setError(e.response?.data?.detail ?? e.message);
+    },
+  });
+
   const submit = (e: FormEvent) => {
     e.preventDefault();
-    run(() => {
-      update((d) => savePlan(d, f));
-      onClose();
-    });
+    setError('');
+    const payload = {
+      ...f,
+      tax: f.tax || null,
+      end_date: f.end_date || null,
+    };
+    saveMutation.mutate(payload);
   };
+
   return (
-    <Modal title={initial.name ? 'Edit plan' : 'New plan'} onClose={onClose} wide>
+    <Modal title={initial ? 'Edit plan' : 'New plan'} onClose={onClose} wide>
       <form className="form" onSubmit={submit}>
         <div className="form-grid">
-          <Field label="Name">
-            <input value={f.name} onChange={(e) => set('name', e.target.value)} autoFocus />
+          <Field label="Plan Name">
+            <input
+              value={f.name}
+              onChange={(e) => setF({ ...f, name: e.target.value })}
+              autoFocus
+              required
+            />
           </Field>
-          <Field label="Price per period">
+          <Field label="Price per Period">
             <input
               type="number"
               min="0"
               step="0.01"
               value={f.price}
-              onChange={(e) => set('price', Number(e.target.value))}
+              onChange={(e) => setF({ ...f, price: Number(e.target.value) })}
+              required
             />
           </Field>
-          <Field label="Billing period">
-            <select value={f.period} onChange={(e) => set('period', e.target.value as Period)}>
-              {PERIODS.map((p) => (
-                <option key={p}>{p}</option>
+          <Field label="Billing Interval">
+            <select
+              value={f.billing_interval}
+              onChange={(e) =>
+                setF({
+                  ...f,
+                  billing_interval: e.target.value as 'daily' | 'weekly' | 'monthly' | 'yearly',
+                })
+              }
+            >
+              {INTERVALS.map((p) => (
+                <option key={p} value={p}>
+                  {p}
+                </option>
               ))}
             </select>
           </Field>
-          <Field label="Minimum quantity">
+          <Field label="Minimum Quantity">
             <input
               type="number"
               min="1"
-              step="1"
-              value={f.minQty}
-              onChange={(e) => set('minQty', Number(e.target.value))}
+              value={f.minimum_quantity}
+              onChange={(e) => setF({ ...f, minimum_quantity: Number(e.target.value) })}
+              required
             />
           </Field>
-          <Field label="Available from">
+          <Field label="Available From">
             <input
               type="date"
-              value={f.startDate}
-              onChange={(e) => set('startDate', e.target.value)}
+              value={f.start_date}
+              onChange={(e) => setF({ ...f, start_date: e.target.value })}
+              required
             />
           </Field>
-          <Field label="Available until">
-            <input type="date" value={f.endDate} onChange={(e) => set('endDate', e.target.value)} />
+          <Field label="Available Until (Optional)">
+            <input
+              type="date"
+              value={f.end_date}
+              onChange={(e) => setF({ ...f, end_date: e.target.value })}
+            />
           </Field>
-          <Field label="Tax on plan fee">
-            <select value={f.taxId} onChange={(e) => set('taxId', e.target.value)}>
+          <Field label="Tax Rule">
+            <select value={f.tax} onChange={(e) => setF({ ...f, tax: e.target.value })}>
               <option value="">No tax</option>
-              {db.taxes.map((t) => (
+              {taxes.map((t) => (
                 <option key={t.id} value={t.id}>
-                  {t.name}
+                  {t.name} ({t.rate}%)
                 </option>
               ))}
             </select>
           </Field>
         </div>
-        <div className="checks">
-          {OPTIONS.map(([k, label]) => (
-            <label key={k} className="check">
-              <input type="checkbox" checked={f[k]} onChange={(e) => set(k, e.target.checked)} />{' '}
-              {label}
-            </label>
-          ))}
+
+        <div className="checks" style={{ marginTop: '1rem' }}>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={f.allow_pause}
+              onChange={(e) => setF({ ...f, allow_pause: e.target.checked })}
+            />{' '}
+            Allow Pause
+          </label>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={f.allow_early_close}
+              onChange={(e) => setF({ ...f, allow_early_close: e.target.checked })}
+            />{' '}
+            Allow Early Close
+          </label>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={f.allow_renewal}
+              onChange={(e) => setF({ ...f, allow_renewal: e.target.checked })}
+            />{' '}
+            Allow Renewal
+          </label>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={f.auto_close_on_end}
+              onChange={(e) => setF({ ...f, auto_close_on_end: e.target.checked })}
+            />{' '}
+            Auto-close at End Date
+          </label>
         </div>
-        <ErrorBanner error={error} />
+
+        {error && <ErrorBanner error={error} />}
+
         <div className="modal-actions">
           <button type="button" className="btn btn-ghost" onClick={onClose}>
             Cancel
           </button>
-          <button type="submit" className="btn btn-primary">
-            Save
+          <button type="submit" className="btn btn-primary" disabled={saveMutation.isPending}>
+            {saveMutation.isPending ? 'Saving…' : 'Save'}
           </button>
         </div>
       </form>
@@ -102,160 +208,101 @@ function PlanForm({ initial, onClose }: { initial: Plan; onClose: () => void }) 
 }
 
 export default function Plans() {
-  const { db, update } = useStore();
-  const { error, run } = useAction();
-  const [editing, setEditing] = useState<Plan | null>(null);
-  const [renewing, setRenewing] = useState<Plan | null>(null);
-  const [newEnd, setNewEnd] = useState('');
-  const today = todayISO();
-  const blank = (): Plan => ({
-    id: uid(),
-    name: '',
-    price: 0,
-    period: 'monthly',
-    minQty: 1,
-    startDate: today,
-    endDate: addPeriod(today, 'yearly', 1),
-    taxId: '',
-    autoClose: false,
-    closable: true,
-    pausable: true,
-    renewable: true,
-    status: 'active',
+  const [editing, setEditing] = useState<Plan | null | 'new'>(null);
+
+  const {
+    data: plans,
+    isLoading,
+    error,
+  } = useQuery({
+    queryKey: ['plans'],
+    queryFn: () =>
+      plansApi.list().then((r) => {
+        const d = r.data;
+        return (d.results ?? d) as Plan[];
+      }),
   });
-  const act = (fn: Parameters<typeof update>[0]) => run(() => update(fn));
+
+  const { data: taxes = [] } = useQuery({
+    queryKey: ['taxes'],
+    queryFn: () => taxesApi.list().then((r) => r.data as TaxRule[]),
+  });
+
+  const apiError = error
+    ? ((error as AxiosError<{ detail?: string }>).response?.data?.detail ??
+      (error as Error).message)
+    : '';
 
   return (
     <>
-      <PageHead title="Plans" sub="Price, billing period and lifecycle rules, set plan by plan">
-        <button className="btn btn-primary" onClick={() => setEditing(blank())}>
+      <PageHead title="Plans" sub="Subscription billing frequencies, prices, and lifecycle rules">
+        <button type="button" className="btn btn-primary" onClick={() => setEditing('new')}>
           + New plan
         </button>
       </PageHead>
-      <ErrorBanner error={error} />
+
+      {apiError && <ErrorBanner error={apiError} />}
+
       <div className="card table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th className="num">Price</th>
-              <th>Billing</th>
-              <th className="num">Min qty</th>
-              <th>Available</th>
-              <th>Rules</th>
-              <th>Status</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {db.plans.map((p) => {
-              const eff = effectivePlanStatus(p, today);
-              return (
+        {isLoading ? (
+          <p className="muted" style={{ padding: '1rem' }}>
+            Loading…
+          </p>
+        ) : (
+          <table>
+            <thead>
+              <tr>
+                <th>Plan Name</th>
+                <th className="num">Price</th>
+                <th>Billing</th>
+                <th className="num">Min Qty</th>
+                <th>Validity</th>
+                <th>Lifecycle Rules</th>
+                <th>Status</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {(plans ?? []).map((p) => (
                 <tr key={p.id}>
                   <td>
                     <strong>{p.name}</strong>
                   </td>
-                  <td className="num">{formatMoney(p.price)}</td>
-                  <td>{p.period}</td>
-                  <td className="num">{p.minQty}</td>
+                  <td className="num">{formatMoney(Number(p.price))}</td>
+                  <td>{p.billing_interval}</td>
+                  <td className="num">{p.minimum_quantity}</td>
                   <td className="small">
-                    {formatDate(p.startDate)} → {formatDate(p.endDate)}
+                    {formatDate(p.start_date)} → {p.end_date ? formatDate(p.end_date) : 'Ongoing'}
                   </td>
                   <td className="chips">
-                    {OPTIONS.filter(([k]) => p[k]).map(([k, l]) => (
-                      <Badge key={k}>
-                        {l
-                          .replace('Close automatically at end date', 'Auto-close')
-                          .replace('Can be ', '')}
-                      </Badge>
-                    ))}
+                    {p.allow_pause && <Badge>Pausable</Badge>}
+                    {p.allow_early_close && <Badge>Closable</Badge>}
+                    {p.allow_renewal && <Badge>Renewable</Badge>}
+                    {p.auto_close_on_end && <Badge>Auto-close</Badge>}
                   </td>
                   <td>
-                    <StatusBadge status={eff} />
+                    <Badge tone={p.is_active ? 'green' : 'gray'}>
+                      {p.is_active ? 'active' : 'inactive'}
+                    </Badge>
                   </td>
                   <td className="actions">
-                    {p.pausable && eff === 'active' && (
-                      <button
-                        className="btn btn-ghost"
-                        onClick={() => act((d) => setPlanStatus(d, p.id, 'paused'))}
-                      >
-                        Pause
-                      </button>
-                    )}
-                    {p.status === 'paused' && eff !== 'closed' && (
-                      <button
-                        className="btn btn-ghost"
-                        onClick={() => act((d) => setPlanStatus(d, p.id, 'active'))}
-                      >
-                        Resume
-                      </button>
-                    )}
-                    {p.closable && eff !== 'closed' && (
-                      <button
-                        className="btn btn-ghost"
-                        onClick={() => act((d) => setPlanStatus(d, p.id, 'closed'))}
-                      >
-                        Close
-                      </button>
-                    )}
-                    {p.renewable && (
-                      <button
-                        className="btn btn-ghost"
-                        onClick={() => {
-                          setRenewing(p);
-                          setNewEnd(addPeriod(p.endDate > today ? p.endDate : today, 'yearly', 1));
-                        }}
-                      >
-                        Renew
-                      </button>
-                    )}
-                    <button className="btn btn-ghost" onClick={() => setEditing(p)}>
+                    <button type="button" className="btn btn-ghost" onClick={() => setEditing(p)}>
                       Edit
-                    </button>
-                    <button
-                      className="btn btn-danger"
-                      onClick={() =>
-                        window.confirm(`Delete "${p.name}"?`) &&
-                        act((d) => removeItem(d, 'plans', p.id))
-                      }
-                    >
-                      Delete
                     </button>
                   </td>
                 </tr>
-              );
-            })}
-          </tbody>
-        </table>
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
-      {editing && <PlanForm initial={editing} onClose={() => setEditing(null)} />}
-      {renewing && (
-        <Modal title={`Renew ${renewing.name}`} onClose={() => setRenewing(null)}>
-          <form
-            className="form"
-            onSubmit={(e) => {
-              e.preventDefault();
-              run(() => {
-                update((d) => renewPlan(d, renewing.id, newEnd));
-                setRenewing(null);
-              });
-            }}
-          >
-            <Field label="New end date">
-              <input type="date" value={newEnd} onChange={(e) => setNewEnd(e.target.value)} />
-            </Field>
-            <p className="muted small">Renewing re-opens the plan if it was closed.</p>
-            <ErrorBanner error={error} />
-            <div className="modal-actions">
-              <button type="button" className="btn btn-ghost" onClick={() => setRenewing(null)}>
-                Cancel
-              </button>
-              <button type="submit" className="btn btn-primary">
-                Renew
-              </button>
-            </div>
-          </form>
-        </Modal>
+
+      {editing !== null && (
+        <PlanForm
+          initial={editing === 'new' ? null : editing}
+          onClose={() => setEditing(null)}
+          taxes={taxes}
+        />
       )}
     </>
   );

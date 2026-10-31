@@ -2,13 +2,18 @@ from rest_framework import serializers
 from .models import Subscription, SubscriptionLine
 
 class SubscriptionLineSerializer(serializers.ModelSerializer):
+    product_name = serializers.CharField(source='product.name', read_only=True, default='')
+
     class Meta:
         model = SubscriptionLine
-        fields = ['id', 'product', 'variant', 'qty', 'unit_price', 'tax']
+        fields = ['id', 'product', 'product_name', 'variant', 'qty', 'unit_price', 'tax']
         read_only_fields = ['id']
 
 class SubscriptionSerializer(serializers.ModelSerializer):
     lines = SubscriptionLineSerializer(many=True, required=False)
+    customer_name = serializers.CharField(source='customer.company_name', read_only=True, default='')
+    plan_name = serializers.CharField(source='plan.name', read_only=True, default='')
+    billing_interval = serializers.CharField(source='plan.billing_interval', read_only=True, default='monthly')
 
     class Meta:
         model = Subscription
@@ -16,7 +21,10 @@ class SubscriptionSerializer(serializers.ModelSerializer):
             'id',
             'subscription_number',
             'customer',
+            'customer_name',
             'plan',
+            'plan_name',
+            'billing_interval',
             'quotation',
             'status',
             'start_date',
@@ -50,4 +58,3 @@ class SubscriptionSerializer(serializers.ModelSerializer):
         for l in lines_data:
             SubscriptionLine.objects.create(subscription=sub, **l)
         return sub
-

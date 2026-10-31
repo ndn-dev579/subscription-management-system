@@ -1,27 +1,85 @@
+import { useMutation, useQuery } from '@tanstack/react-query';
+import type { AxiosError } from 'axios';
 import { type FormEvent, useState } from 'react';
 import { ErrorBanner, Field, Modal, PageHead } from '../components/ui';
-import { removeItem, saveTax } from '../lib/actions';
-import { uid } from '../lib/format';
+import { taxesApi } from '../lib/api';
 import { useAction } from '../lib/hooks';
-import { useStore } from '../store/store';
-import type { Tax } from '../types';
+import { queryClient } from '../lib/queryClient';
 
-function TaxForm({ initial, onClose }: { initial: Tax; onClose: () => void }) {
-  const { update } = useStore();
-  const { error, run } = useAction();
-  const [f, setF] = useState(initial);
+interface Tax {
+  id: string;
+  name: string;
+  rate: number;
+}
+
+interface TaxFormData {
+  name: string;
+  rate: number;
+}
+
+function TaxForm({ initial, onClose }: { initial: Tax | null; onClose: () => void }) {
+  const { error: actionError, run } = useAction();
+  const [f, setF] = useState<TaxFormData>({
+    name: initial?.name ?? '',
+    rate: initial?.rate ?? 0,
+  });
+  const [apiError, setApiError] = useState('');
+
+  const createMutation = useMutation({
+    mutationFn: (payload: Record<string, unknown>) => taxesApi.create(payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['taxes'] });
+      onClose();
+    },
+    onError: (err) => {
+      const e = err as AxiosError<{ detail?: string }>;
+      setApiError(e.response?.data?.detail ?? e.message);
+    },
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: ({ id, payload }: { id: string; payload: Record<string, unknown> }) =>
+      taxesApi.update(id, payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['taxes'] });
+      onClose();
+    },
+    onError: (err) => {
+      const e = err as AxiosError<{ detail?: string }>;
+      setApiError(e.response?.data?.detail ?? e.message);
+    },
+  });
+
+  const isPending = createMutation.isPending || updateMutation.isPending;
+
   const submit = (e: FormEvent) => {
     e.preventDefault();
+    setApiError('');
     run(() => {
-      update((d) => saveTax(d, f));
-      onClose();
+      const payload: Record<string, unknown> = {
+        name: f.name,
+        rate: f.rate,
+      };
+      if (initial?.id) {
+        updateMutation.mutate({ id: initial.id, payload });
+      } else {
+        createMutation.mutate(payload);
+      }
     });
   };
+
+  const displayError = apiError || actionError;
+
   return (
-    <Modal title={initial.name ? 'Edit tax' : 'New tax'} onClose={onClose}>
+    <Modal title={initial?.name ? 'Edit tax' : 'New tax'} onClose={onClose}>
       <form className="form" onSubmit={submit}>
         <Field label="Name">
-          <input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} autoFocus />
+          <input
+            value={f.name}
+            onChange={(e) => setF({ ...f, name: e.target.value })}
+            autoFocus
+            required
+          />
         </Field>
         <Field label="Rate (%)">
           <input
@@ -31,15 +89,16 @@ function TaxForm({ initial, onClose }: { initial: Tax; onClose: () => void }) {
             step="0.01"
             value={f.rate}
             onChange={(e) => setF({ ...f, rate: Number(e.target.value) })}
+            required
           />
         </Field>
-        <ErrorBanner error={error} />
+        {displayError && <ErrorBanner error={displayError} />}
         <div className="modal-actions">
           <button type="button" className="btn btn-ghost" onClick={onClose}>
             Cancel
           </button>
-          <button type="submit" className="btn btn-primary">
-            Save
+          <button type="submit" className="btn btn-primary" disabled={isPending}>
+            {isPending ? 'Saving…' : 'Save'}
           </button>
         </div>
       </form>
@@ -48,56 +107,68 @@ function TaxForm({ initial, onClose }: { initial: Tax; onClose: () => void }) {
 }
 
 export default function Taxes() {
-  const { db, update } = useStore();
-  const { error, run } = useAction();
-  const [editing, setEditing] = useState<Tax | null>(null);
+  const [editing, setEditing] = useState<Tax | null | 'new'>(null);
+
+  const {
+    data: taxes,
+    isLoading,
+    error: queryError,
+  } = useQuery({
+    queryKey: ['taxes'],
+    queryFn: () => taxesApi.list().then((r) => r.data as Tax[]),
+  });
+
+  const apiError = queryError
+    ? ((queryError as AxiosError<{ detail?: string }>).response?.data?.detail ??
+      (queryError as Error).message)
+    : '';
+
   return (
     <>
       <PageHead title="Taxes" sub="Rules used to calculate tax on every invoice automatically">
-        <button
-          className="btn btn-primary"
-          onClick={() => setEditing({ id: uid(), name: '', rate: 0 })}
-        >
+        <button type="button" className="btn btn-primary" onClick={() => setEditing('new')}>
           + New tax
         </button>
       </PageHead>
-      <ErrorBanner error={error} />
+
+      {apiError && <ErrorBanner error={apiError} />}
+
       <div className="card table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th className="num">Rate</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {db.taxes.map((t) => (
-              <tr key={t.id}>
-                <td>
-                  <strong>{t.name}</strong>
-                </td>
-                <td className="num">{t.rate}%</td>
-                <td className="actions">
-                  <button className="btn btn-ghost" onClick={() => setEditing(t)}>
-                    Edit
-                  </button>
-                  <button
-                    className="btn btn-danger"
-                    onClick={() =>
-                      window.confirm(`Delete "${t.name}"?`) &&
-                      run(() => update((d) => removeItem(d, 'taxes', t.id)))
-                    }
-                  >
-                    Delete
-                  </button>
-                </td>
+        {isLoading ? (
+          <p className="muted" style={{ padding: '1rem' }}>
+            Loading…
+          </p>
+        ) : (
+          <table>
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th className="num">Rate</th>
+                <th />
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {(taxes ?? []).map((t) => (
+                <tr key={t.id}>
+                  <td>
+                    <strong>{t.name}</strong>
+                  </td>
+                  <td className="num">{t.rate}%</td>
+                  <td className="actions">
+                    <button type="button" className="btn btn-ghost" onClick={() => setEditing(t)}>
+                      Edit
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
-      {editing && <TaxForm initial={editing} onClose={() => setEditing(null)} />}
+
+      {editing !== null && (
+        <TaxForm initial={editing === 'new' ? null : editing} onClose={() => setEditing(null)} />
+      )}
     </>
   );
 }

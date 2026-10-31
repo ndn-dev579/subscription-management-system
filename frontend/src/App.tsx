@@ -1,6 +1,8 @@
 import type { ReactNode } from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
 import Layout from './components/Layout';
+import type { AuthUser } from './contexts/AuthContext';
+import { useAuth } from './contexts/AuthContext';
 import { ForgotPage, LoginPage, ResetPage, SignupPage } from './pages/Auth';
 import Dashboard from './pages/Dashboard';
 import Discounts from './pages/Discounts';
@@ -10,22 +12,24 @@ import Payments from './pages/Payments';
 import People from './pages/People';
 import Plans from './pages/Plans';
 import Products from './pages/Products';
+import Quotations from './pages/Quotations';
 import SubscriptionDetail from './pages/SubscriptionDetail';
 import Subscriptions from './pages/Subscriptions';
 import Taxes from './pages/Taxes';
 import Templates from './pages/Templates';
-import { useStore } from './store/store';
-import type { Role } from './types';
+
+type Role = AuthUser['role'];
 
 function Guard({ roles, children }: { roles?: Role[]; children: ReactNode }) {
-  const { me } = useStore();
+  const { me, isLoading } = useAuth();
+  if (isLoading) return <div className="loading-screen">Loading…</div>;
   if (!me) return <Navigate to="/login" replace />;
   if (roles && !roles.includes(me.role)) return <Navigate to="/" replace />;
   return <>{children}</>;
 }
 
 function Home() {
-  const { me } = useStore();
+  const { me } = useAuth();
   return me?.role === 'customer' ? <Navigate to="/subscriptions" replace /> : <Dashboard />;
 }
 
@@ -64,6 +68,14 @@ export default function App() {
           element={
             <Guard roles={TEAM}>
               <People />
+            </Guard>
+          }
+        />
+        <Route
+          path="quotations"
+          element={
+            <Guard roles={TEAM}>
+              <Quotations />
             </Guard>
           }
         />

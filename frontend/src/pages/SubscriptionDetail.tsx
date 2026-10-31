@@ -1,224 +1,257 @@
+import { useMutation, useQuery } from '@tanstack/react-query';
+import type { AxiosError } from 'axios';
 import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import SubscriptionForm from '../components/SubscriptionForm';
 import { Card, ErrorBanner, PageHead, StatusBadge } from '../components/ui';
-import { setSubscriptionStatus } from '../lib/actions';
-import { generateInvoice, nextBillingDate } from '../lib/billing';
-import { formatDate, formatMoney, todayISO, who } from '../lib/format';
-import { useAction } from '../lib/hooks';
-import { useStore } from '../store/store';
-import { SUB_FLOW, type SubStatus, TERMS } from '../types';
+import { useAuth } from '../contexts/AuthContext';
+import { subscriptionsApi } from '../lib/api';
+import { formatDate, formatMoney } from '../lib/format';
+import { queryClient } from '../lib/queryClient';
 
-const NEXT: Partial<Record<SubStatus, { to: SubStatus; label: string }>> = {
-  draft: { to: 'quotation', label: 'Send quotation' },
-  quotation: { to: 'confirmed', label: 'Confirm' },
-  confirmed: { to: 'active', label: 'Activate' },
-};
+interface SubLine {
+  id: string;
+  product_name: string;
+  qty: number;
+  unit_price: string;
+}
+
+interface SubscriptionData {
+  id: string;
+  subscription_number: string;
+  customer: string;
+  customer_name: string;
+  plan: string;
+  plan_name: string;
+  billing_interval: string;
+  status: 'draft' | 'confirmed' | 'active' | 'paused' | 'closed';
+  start_date: string;
+  expiry_date: string;
+  payment_terms: string;
+  allow_pause: boolean;
+  allow_early_close: boolean;
+  allow_renewal: boolean;
+  last_billed_date: string | null;
+  next_billing_date: string | null;
+  close_reason?: string;
+  lines: SubLine[];
+}
 
 export default function SubscriptionDetail() {
   const { id = '' } = useParams();
-  const { db, by, me, update } = useStore();
-  const { error, run } = useAction();
-  const [editing, setEditing] = useState(false);
-  const s = by.sub.get(id);
-  if (!s || !me || (me.role === 'customer' && s.customerId !== me.id)) {
+  const { me } = useAuth();
+  const [note, setNote] = useState('');
+  const [errorMsg, setErrorMsg] = useState('');
+
+  const {
+    data: sub,
+    isLoading,
+    error,
+  } = useQuery({
+    queryKey: ['subscription', id],
+    queryFn: () => subscriptionsApi.get(id).then((r) => r.data as SubscriptionData),
+  });
+
+  const pauseMutation = useMutation({
+    mutationFn: () => subscriptionsApi.pause(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['subscription', id] });
+      setNote('Subscription paused.');
+    },
+    onError: (err) => {
+      const e = err as AxiosError<{ detail?: string }>;
+      setErrorMsg(e.response?.data?.detail ?? e.message);
+    },
+  });
+
+  const resumeMutation = useMutation({
+    mutationFn: () => subscriptionsApi.resume(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['subscription', id] });
+      setNote('Subscription resumed.');
+    },
+    onError: (err) => {
+      const e = err as AxiosError<{ detail?: string }>;
+      setErrorMsg(e.response?.data?.detail ?? e.message);
+    },
+  });
+
+  const closeMutation = useMutation({
+    mutationFn: (reason: string) => subscriptionsApi.close(id, reason),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['subscription', id] });
+      setNote('Subscription closed.');
+    },
+    onError: (err) => {
+      const e = err as AxiosError<{ detail?: string }>;
+      setErrorMsg(e.response?.data?.detail ?? e.message);
+    },
+  });
+
+  const renewMutation = useMutation({
+    mutationFn: (endDate: string) => subscriptionsApi.renew(id, { expiry_date: endDate }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['subscription', id] });
+      setNote('Subscription renewed.');
+    },
+    onError: (err) => {
+      const e = err as AxiosError<{ detail?: string }>;
+      setErrorMsg(e.response?.data?.detail ?? e.message);
+    },
+  });
+
+  if (isLoading) {
     return (
       <Card>
-        <p>Subscription not found.</p>
-        <Link to="/subscriptions">← Back</Link>
+        <p className="muted">Loading subscription…</p>
       </Card>
     );
   }
 
-  const isTeam = me.role !== 'customer';
-  const plan = by.plan.get(s.planId);
-  const step = NEXT[s.status];
-  const canClose = s.status !== 'closed' && (isTeam || (s.status === 'active' && plan?.closable));
-  const invoices = db.invoices.filter(
-    (i) => i.subscriptionId === s.id && (isTeam || i.status === 'confirmed' || i.status === 'paid'),
-  );
-  const rows = [
-    ...(plan && plan.price > 0
-      ? [{ name: `Plan fee: ${plan.name}`, qty: 1, unit: plan.price, tax: by.tax.get(plan.taxId) }]
-      : []),
-    ...s.lines.map((l) => {
-      const p = by.product.get(l.productId);
-      const v = p?.variants.find((x) => x.id === l.variantId);
-      return {
-        name: p ? (v ? `${p.name} (${v.attribute}: ${v.value})` : p.name) : 'Unknown product',
-        qty: l.qty,
-        unit: l.unitPrice,
-        tax: by.tax.get(p?.taxId ?? ''),
-      };
-    }),
-  ];
-  const untaxed = rows.reduce((a, r) => a + r.qty * r.unit, 0);
-  const taxes = rows.reduce((a, r) => a + (r.qty * r.unit * (r.tax?.rate ?? 0)) / 100, 0);
-  const expired = s.status === 'quotation' && s.quoteValidUntil < todayISO();
+  if (error || !sub) {
+    return (
+      <Card>
+        <p>Subscription not found or access denied.</p>
+        <Link to="/subscriptions">← Back to Subscriptions</Link>
+      </Card>
+    );
+  }
+
+  const isTeam = me?.role !== 'customer';
+  const totalPeriod = sub.lines.reduce((acc, l) => acc + l.qty * Number(l.unit_price), 0);
 
   return (
     <>
-      <PageHead title={s.number} sub={who(by.user.get(s.customerId))}>
-        {isTeam && (s.status === 'draft' || s.status === 'quotation') && (
-          <button className="btn btn-ghost" onClick={() => setEditing(true)}>
-            Edit
-          </button>
-        )}
-        {isTeam && s.status === 'active' && (
+      <PageHead
+        title={sub.subscription_number}
+        sub={`Customer: ${sub.customer_name} · Plan: ${sub.plan_name}`}
+      >
+        {isTeam && sub.status === 'active' && sub.allow_pause && (
           <button
+            type="button"
             className="btn btn-ghost"
-            onClick={() => run(() => update((d) => generateInvoice(d, s.id)))}
+            disabled={pauseMutation.isPending}
+            onClick={() => pauseMutation.mutate()}
           >
-            Generate next invoice
+            Pause
           </button>
         )}
-        {isTeam && step && (
+        {isTeam && sub.status === 'paused' && (
           <button
-            className="btn btn-primary"
-            onClick={() => run(() => update((d) => setSubscriptionStatus(d, s.id, step.to)))}
+            type="button"
+            className="btn btn-ghost"
+            disabled={resumeMutation.isPending}
+            onClick={() => resumeMutation.mutate()}
           >
-            {step.label}
+            Resume
           </button>
         )}
-        {canClose && (
+        {isTeam && sub.status !== 'closed' && (
           <button
+            type="button"
             className="btn btn-danger"
-            onClick={() =>
-              window.confirm('Close this subscription?') &&
-              run(() => update((d) => setSubscriptionStatus(d, s.id, 'closed')))
-            }
+            disabled={closeMutation.isPending}
+            onClick={() => {
+              const reason = prompt('Closing reason:');
+              if (reason) closeMutation.mutate(reason);
+            }}
           >
-            Close subscription
+            Close
+          </button>
+        )}
+        {isTeam && sub.allow_renewal && (
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={renewMutation.isPending}
+            onClick={() => {
+              const newEnd = prompt('Enter new expiry date (YYYY-MM-DD):');
+              if (newEnd) renewMutation.mutate(newEnd);
+            }}
+          >
+            Renew
           </button>
         )}
       </PageHead>
-      <ErrorBanner error={error} />
 
-      <div className="stepper">
-        {SUB_FLOW.map((st, i) => (
-          <span
-            key={st}
-            className={`step ${i < SUB_FLOW.indexOf(s.status) ? 'done' : ''} ${st === s.status ? 'current' : ''}`}
-          >
-            {st}
-          </span>
-        ))}
-      </div>
+      {note && <p className="success no-print">{note}</p>}
+      {errorMsg && <ErrorBanner error={errorMsg} />}
 
-      <Card>
-        <dl className="kv">
-          <div>
-            <dt>Status</dt>
-            <dd>
-              <StatusBadge status={s.status} />
-              {expired && <span className="error small"> quote expired</span>}
-            </dd>
-          </div>
-          <div>
-            <dt>Plan</dt>
-            <dd>{plan ? `${plan.name} · ${plan.period}` : '—'}</dd>
-          </div>
-          <div>
-            <dt>Start date</dt>
-            <dd>{formatDate(s.startDate)}</dd>
-          </div>
-          <div>
-            <dt>Expiry date</dt>
-            <dd>{formatDate(s.expiryDate)}</dd>
-          </div>
-          <div>
-            <dt>Payment terms</dt>
-            <dd>{TERMS[s.terms].label}</dd>
-          </div>
-          <div>
-            <dt>{s.status === 'active' ? 'Next invoice' : 'Quotation valid until'}</dt>
-            <dd>
-              {formatDate(
-                s.status === 'active' ? nextBillingDate(s, plan, db.invoices) : s.quoteValidUntil,
-              )}
-            </dd>
-          </div>
-        </dl>
-      </Card>
+      <section className="grid-2">
+        <Card title="Subscription Details">
+          <ul className="list">
+            <li>
+              <span>Status</span>
+              <strong>
+                <StatusBadge status={sub.status} />
+              </strong>
+            </li>
+            <li>
+              <span>Billing Interval</span>
+              <strong>{sub.billing_interval}</strong>
+            </li>
+            <li>
+              <span>Start Date</span>
+              <strong>{formatDate(sub.start_date)}</strong>
+            </li>
+            <li>
+              <span>Expiry Date</span>
+              <strong>{formatDate(sub.expiry_date)}</strong>
+            </li>
+            <li>
+              <span>Next Billing Date</span>
+              <strong>{sub.next_billing_date ? formatDate(sub.next_billing_date) : '—'}</strong>
+            </li>
+            <li>
+              <span>Payment Terms</span>
+              <strong>{sub.payment_terms}</strong>
+            </li>
+          </ul>
+        </Card>
 
-      <Card title="Lines (per billing period)">
+        <Card title="Recurring Pricing">
+          <ul className="list">
+            <li>
+              <span>Total per period</span>
+              <strong>
+                {formatMoney(totalPeriod)} / {sub.billing_interval}
+              </strong>
+            </li>
+            {sub.close_reason && (
+              <li>
+                <span>Close Reason</span>
+                <span className="muted">{sub.close_reason}</span>
+              </li>
+            )}
+          </ul>
+        </Card>
+      </section>
+
+      <Card title="Subscription Products & Licenses">
         <div className="table-wrap">
           <table>
             <thead>
               <tr>
                 <th>Product</th>
-                <th className="num">Qty</th>
-                <th className="num">Unit price</th>
-                <th>Tax</th>
-                <th className="num">Amount</th>
+                <th className="num">Quantity</th>
+                <th className="num">Unit Price</th>
+                <th className="num">Recurring Subtotal</th>
               </tr>
             </thead>
             <tbody>
-              {rows.map((r, i) => (
-                <tr key={i}>
-                  <td>{r.name}</td>
-                  <td className="num">{r.qty}</td>
-                  <td className="num">{formatMoney(r.unit)}</td>
-                  <td>{r.tax ? r.tax.name : '—'}</td>
-                  <td className="num">{formatMoney(r.qty * r.unit)}</td>
+              {sub.lines.map((l) => (
+                <tr key={l.id}>
+                  <td>
+                    <strong>{l.product_name || 'Software License'}</strong>
+                  </td>
+                  <td className="num">{l.qty}</td>
+                  <td className="num">{formatMoney(Number(l.unit_price))}</td>
+                  <td className="num">{formatMoney(l.qty * Number(l.unit_price))}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
-        <div className="totals">
-          <div>
-            <span>Untaxed</span>
-            <span>{formatMoney(untaxed)}</span>
-          </div>
-          <div>
-            <span>Taxes</span>
-            <span>{formatMoney(taxes)}</span>
-          </div>
-          <div className="grand">
-            <span>Total before discounts</span>
-            <span>{formatMoney(untaxed + taxes)}</span>
-          </div>
-        </div>
       </Card>
-
-      <Card title="Invoices">
-        {invoices.length === 0 ? (
-          <p className="muted">No invoices yet.</p>
-        ) : (
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Invoice</th>
-                  <th>Period</th>
-                  <th>Due</th>
-                  <th className="num">Total</th>
-                  <th>Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {invoices.map((i) => (
-                  <tr key={i.id}>
-                    <td>
-                      <Link to={`/invoices/${i.id}`}>{i.number}</Link>
-                    </td>
-                    <td>
-                      {formatDate(i.periodStart)} → {formatDate(i.periodEnd)}
-                    </td>
-                    <td>{formatDate(i.dueDate)}</td>
-                    <td className="num">{formatMoney(i.total)}</td>
-                    <td>
-                      <StatusBadge status={i.status} />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </Card>
-      {editing && <SubscriptionForm initial={s} onClose={() => setEditing(false)} />}
     </>
   );
 }

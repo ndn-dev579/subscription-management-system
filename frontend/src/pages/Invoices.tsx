@@ -1,70 +1,110 @@
+import { useMutation, useQuery } from '@tanstack/react-query';
+import type { AxiosError } from 'axios';
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Badge, ErrorBanner, PageHead, Pager, StatusBadge } from '../components/ui';
-import { isOverdue, outstanding, runBilling } from '../lib/billing';
-import { formatDate, formatMoney, todayISO, who } from '../lib/format';
-import { useAction, usePaged } from '../lib/hooks';
-import { useStore } from '../store/store';
+import { useAuth } from '../contexts/AuthContext';
+import { invoicesApi } from '../lib/api';
+import { formatDate, formatMoney } from '../lib/format';
+import { usePaged } from '../lib/hooks';
+import { queryClient } from '../lib/queryClient';
+
+interface Invoice {
+  id: string;
+  invoice_number: string;
+  customer: string;
+  customer_name: string;
+  subscription: string | null;
+  subscription_number: string;
+  issue_date: string;
+  due_date: string;
+  status: 'draft' | 'confirmed' | 'paid' | 'cancelled';
+  total_amount: string;
+  outstanding_amount: string;
+}
 
 export default function Invoices() {
-  const { scope, by, me, update } = useStore();
-  const { error, run } = useAction();
+  const { me } = useAuth();
   const [q, setQ] = useState('');
   const [status, setStatus] = useState('');
-  const [msg, setMsg] = useState('');
   const isTeam = me?.role !== 'customer';
-  const today = todayISO();
+  const today = new Date().toISOString().slice(0, 10);
+
+  const {
+    data: invoices,
+    isLoading,
+    error,
+  } = useQuery({
+    queryKey: ['invoices'],
+    queryFn: () =>
+      invoicesApi.list().then((r) => {
+        const d = r.data;
+        return (d.results ?? d) as Invoice[];
+      }),
+  });
+
+  const confirmMutation = useMutation({
+    mutationFn: (id: string) => invoicesApi.confirm(id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['invoices'] }),
+  });
+
+  const cancelMutation = useMutation({
+    mutationFn: ({ id, reason }: { id: string; reason: string }) => invoicesApi.cancel(id, reason),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['invoices'] }),
+  });
 
   const rows = useMemo(() => {
+    const all = invoices ?? [];
     const needle = q.trim().toLowerCase();
-    return scope.invoices
-      .filter((i) => {
-        if (status === 'overdue' ? !isOverdue(i, today) : status && i.status !== status)
-          return false;
-        if (!needle) return true;
-        const u = by.user.get(i.customerId);
-        return (
-          i.number.toLowerCase().includes(needle) ||
-          (u?.company ?? '').toLowerCase().includes(needle) ||
-          (u?.name ?? '').toLowerCase().includes(needle)
-        );
-      })
-      .sort((a, b) => b.number.localeCompare(a.number));
-  }, [scope.invoices, by, q, status, today]);
-  const pg = usePaged(rows);
-
-  const billingDay = () =>
-    run(() => {
-      let created = 0;
-      update((d) => {
-        const r = runBilling(d);
-        created = r.created;
-        return r.db;
-      });
-      setMsg(
-        created
-          ? `Billing run complete: ${created} draft invoice(s) created.`
-          : 'Nothing is due: every active subscription is already invoiced.',
+    return all.filter((i) => {
+      const isOverdue =
+        i.status === 'confirmed' && i.due_date < today && Number(i.outstanding_amount) > 0;
+      if (status === 'overdue' ? !isOverdue : status && i.status !== status) {
+        return false;
+      }
+      if (!needle) return true;
+      return (
+        i.invoice_number.toLowerCase().includes(needle) ||
+        (i.customer_name ?? '').toLowerCase().includes(needle) ||
+        (i.subscription_number ?? '').toLowerCase().includes(needle)
       );
     });
+  }, [invoices, q, status, today]);
+
+  const pg = usePaged(rows);
+
+  const downloadPdf = async (id: string, num: string) => {
+    try {
+      const res = await invoicesApi.downloadPdf(id);
+      const blob = new Blob([res.data], { type: 'text/plain' });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `Invoice-${num}.txt`;
+      a.click();
+      window.URL.revokeObjectURL(url);
+    } catch (e) {
+      alert('Failed to download invoice');
+    }
+  };
+
+  const apiError = error
+    ? ((error as AxiosError<{ detail?: string }>).response?.data?.detail ??
+      (error as Error).message)
+    : '';
 
   return (
     <>
       <PageHead
         title={isTeam ? 'Invoices' : 'My invoices'}
-        sub={`${scope.invoices.length.toLocaleString()} total`}
-      >
-        {isTeam && (
-          <button className="btn btn-primary" onClick={billingDay}>
-            Run billing
-          </button>
-        )}
-      </PageHead>
-      {msg && <p className="success">{msg}</p>}
-      <ErrorBanner error={error} />
+        sub={`${(invoices ?? []).length.toLocaleString()} total`}
+      />
+
+      {apiError && <ErrorBanner error={apiError} />}
+
       <div className="toolbar">
         <input
-          placeholder="Search invoice or customer…"
+          placeholder="Search invoice number or customer…"
           value={q}
           onChange={(e) => setQ(e.target.value)}
         />
@@ -72,61 +112,107 @@ export default function Invoices() {
           <option value="">All statuses</option>
           {(isTeam ? ['draft', 'confirmed', 'paid', 'cancelled'] : ['confirmed', 'paid']).map(
             (s) => (
-              <option key={s}>{s}</option>
+              <option key={s} value={s}>
+                {s}
+              </option>
             ),
           )}
-          <option value="overdue">overdue</option>
+          <option value="overdue">Overdue</option>
         </select>
-        <span />
       </div>
+
       <div className="card table-wrap">
-        {rows.length === 0 ? (
+        {isLoading ? (
+          <p className="muted" style={{ padding: '1rem' }}>
+            Loading…
+          </p>
+        ) : rows.length === 0 ? (
           <p className="empty">No invoices match.</p>
         ) : (
           <table>
             <thead>
               <tr>
-                <th>Invoice</th>
+                <th>Invoice #</th>
                 {isTeam && <th>Customer</th>}
                 <th>Subscription</th>
-                <th>Issued</th>
-                <th>Due</th>
+                <th>Issue Date</th>
+                <th>Due Date</th>
                 <th className="num">Total</th>
                 <th className="num">Balance</th>
                 <th>Status</th>
+                <th />
               </tr>
             </thead>
             <tbody>
-              {pg.rows.map((i) => (
-                <tr key={i.id}>
-                  <td>
-                    <Link to={`/invoices/${i.id}`}>
-                      <strong>{i.number}</strong>
-                    </Link>
-                  </td>
-                  {isTeam && <td>{who(by.user.get(i.customerId))}</td>}
-                  <td>{by.sub.get(i.subscriptionId)?.number}</td>
-                  <td>{formatDate(i.issueDate)}</td>
-                  <td>{formatDate(i.dueDate)}</td>
-                  <td className="num">{formatMoney(i.total)}</td>
-                  <td className="num">
-                    {i.status === 'confirmed' ? formatMoney(outstanding(i)) : '—'}
-                  </td>
-                  <td>
-                    <StatusBadge status={i.status} />
-                    {isOverdue(i, today) && (
-                      <>
-                        {' '}
-                        <Badge tone="red">overdue</Badge>
-                      </>
-                    )}
-                  </td>
-                </tr>
-              ))}
+              {pg.rows.map((i) => {
+                const isOverdue =
+                  i.status === 'confirmed' &&
+                  i.due_date < today &&
+                  Number(i.outstanding_amount) > 0;
+                return (
+                  <tr key={i.id}>
+                    <td>
+                      <Link to={`/invoices/${i.id}`}>
+                        <strong>{i.invoice_number}</strong>
+                      </Link>
+                    </td>
+                    {isTeam && <td>{i.customer_name || '—'}</td>}
+                    <td>{i.subscription_number || 'One-off'}</td>
+                    <td>{formatDate(i.issue_date)}</td>
+                    <td>{formatDate(i.due_date)}</td>
+                    <td className="num">{formatMoney(Number(i.total_amount))}</td>
+                    <td className="num">
+                      {i.status === 'confirmed' ? formatMoney(Number(i.outstanding_amount)) : '—'}
+                    </td>
+                    <td>
+                      <StatusBadge status={i.status} />
+                      {isOverdue && (
+                        <>
+                          {' '}
+                          <Badge tone="red">overdue</Badge>
+                        </>
+                      )}
+                    </td>
+                    <td className="actions">
+                      <button
+                        type="button"
+                        className="btn btn-ghost"
+                        onClick={() => downloadPdf(i.id, i.invoice_number)}
+                      >
+                        PDF
+                      </button>
+                      {isTeam && i.status === 'draft' && (
+                        <button
+                          type="button"
+                          className="btn btn-ghost"
+                          disabled={confirmMutation.isPending}
+                          onClick={() => confirmMutation.mutate(i.id)}
+                        >
+                          Confirm
+                        </button>
+                      )}
+                      {isTeam && (i.status === 'draft' || i.status === 'confirmed') && (
+                        <button
+                          type="button"
+                          className="btn btn-danger"
+                          disabled={cancelMutation.isPending}
+                          onClick={() => {
+                            const reason = prompt('Cancellation reason:');
+                            if (reason) cancelMutation.mutate({ id: i.id, reason });
+                          }}
+                        >
+                          Cancel
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         )}
       </div>
+
       <Pager {...pg} />
     </>
   );
