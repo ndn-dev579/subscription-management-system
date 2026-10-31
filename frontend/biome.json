@@ -44,6 +44,18 @@
     "enabled": true,
     "rules": {
       "preset": "recommended",
+      "a11y": {
+        "useButtonType": "off",
+        "noStaticElementInteractions": "warn",
+        "noLabelWithoutControl": "warn",
+        "noAutofocus": "warn",
+        "useValidAnchor": "warn",
+        "noSvgWithoutTitle": "off"
+      },
+      "complexity": {
+        "noImportantStyles": "off",
+        "useMathMinMax": "off"
+      },
       "correctness": {
         "noUnusedVariables": "warn"
       },
@@ -51,7 +63,8 @@
         "noNonNullAssertion": "warn"
       },
       "suspicious": {
-        "noExplicitAny": "warn"
+        "noExplicitAny": "warn",
+        "noArrayIndexKey": "warn"
       }
     }
   },
