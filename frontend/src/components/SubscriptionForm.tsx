@@ -38,7 +38,7 @@ export default function SubscriptionForm({
   const plan = by.plan.get(f.planId);
   const plans = db.plans.filter((p) => p.id === f.planId || planBookable(p, today));
 
-  const useTemplate = (id: string) => {
+  const applyTemplate = (id: string) => {
     const t = db.templates.find((x) => x.id === id);
     if (!t) return;
     const p = by.plan.get(t.planId);
@@ -50,7 +50,7 @@ export default function SubscriptionForm({
       expiryDate: p ? defaultExpiry(x.startDate, p.period) : x.expiryDate,
     }));
   };
-  const usePlan = (id: string) => {
+  const applyPlan = (id: string) => {
     const p = by.plan.get(id);
     setF((x) => ({
       ...x,
@@ -71,7 +71,7 @@ export default function SubscriptionForm({
       <form className="form" onSubmit={submit}>
         {!initial && (
           <Field label="Start from a quotation template (optional)">
-            <select defaultValue="" onChange={(e) => useTemplate(e.target.value)}>
+            <select defaultValue="" onChange={(e) => applyTemplate(e.target.value)}>
               <option value="">— build from scratch —</option>
               {db.templates.map((t) => (
                 <option key={t.id} value={t.id}>
@@ -98,7 +98,7 @@ export default function SubscriptionForm({
             label="Plan"
             hint={plan ? `Billed ${plan.period} · minimum quantity ${plan.minQty}` : undefined}
           >
-            <select value={f.planId} onChange={(e) => usePlan(e.target.value)}>
+            <select value={f.planId} onChange={(e) => applyPlan(e.target.value)}>
               <option value="">Select plan…</option>
               {plans.map((p) => (
                 <option key={p.id} value={p.id}>

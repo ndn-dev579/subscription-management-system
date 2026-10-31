@@ -18,49 +18,40 @@ export default function Payments() {
   const [paying, setPaying] = useState<Invoice | null>(null);
   const today = todayISO();
   const needle = q.trim().toLowerCase();
-  const matches = (invNumber: string, customerId: string) => {
-    const u = by.user.get(customerId);
-    return (
-      !needle ||
-      invNumber.toLowerCase().includes(needle) ||
-      (u?.company ?? '').toLowerCase().includes(needle) ||
-      (u?.name ?? '').toLowerCase().includes(needle)
-    );
-  };
+  const invoices = useMemo(() => {
+    if (tab === 'history') return [];
+    return db.invoices
+      .filter((i) => {
+        const statusMatch =
+          tab === 'paid' ? i.status === 'paid' : i.status === 'confirmed' && outstanding(i) > 0;
+        if (!statusMatch) return false;
+        if (!needle) return true;
+        const u = by.user.get(i.customerId);
+        return (
+          i.number.toLowerCase().includes(needle) ||
+          (u?.company ?? '').toLowerCase().includes(needle) ||
+          (u?.name ?? '').toLowerCase().includes(needle)
+        );
+      })
+      .sort((a, b) => a.dueDate.localeCompare(b.dueDate));
+  }, [db.invoices, tab, needle, by]);
 
-  const invoices = useMemo(
-    () =>
-      tab === 'history'
-        ? []
-        : db.invoices
-            .filter(
-              (i) =>
-                (tab === 'paid'
-                  ? i.status === 'paid'
-                  : i.status === 'confirmed' && outstanding(i) > 0) &&
-                matches(i.number, i.customerId),
-            )
-            .sort((a, b) => a.dueDate.localeCompare(b.dueDate)),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [db.invoices, tab, needle],
-  );
-  const history = useMemo(
-    () =>
-      tab !== 'history'
-        ? []
-        : db.payments
-            .filter(
-              (p) =>
-                (!method || p.method === method) &&
-                matches(
-                  by.invoice.get(p.invoiceId)?.number ?? '',
-                  by.invoice.get(p.invoiceId)?.customerId ?? '',
-                ),
-            )
-            .sort((a, b) => b.date.localeCompare(a.date)),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [db.payments, tab, method, needle, by],
-  );
+  const history = useMemo(() => {
+    if (tab !== 'history') return [];
+    return db.payments
+      .filter((p) => {
+        if (method && p.method !== method) return false;
+        if (!needle) return true;
+        const inv = by.invoice.get(p.invoiceId);
+        const u = inv ? by.user.get(inv.customerId) : null;
+        return (
+          (inv?.number ?? '').toLowerCase().includes(needle) ||
+          (u?.company ?? '').toLowerCase().includes(needle) ||
+          (u?.name ?? '').toLowerCase().includes(needle)
+        );
+      })
+      .sort((a, b) => b.date.localeCompare(a.date));
+  }, [db.payments, tab, method, needle, by]);
   const pgInv = usePaged(invoices);
   const pgHis = usePaged(history);
 
