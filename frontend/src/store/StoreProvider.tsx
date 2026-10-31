@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { seedDb } from '../data/seed';
 import { addUser } from '../lib/actions';
 import { uid } from '../lib/format';
 import { passwordIssues } from '../lib/validation';
 import type { Db } from '../types';
-import { StoreContext, type Lookups, type Store } from './store';
+import { type Lookups, type Store, StoreContext } from './store';
 
 const KEY = 'brightloop.db.v1';
 
@@ -39,7 +39,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const by = useMemo<Lookups>(
-    () => ({ user: index(db.users), plan: index(db.plans), product: index(db.products), tax: index(db.taxes), sub: index(db.subscriptions), invoice: index(db.invoices) }),
+    () => ({
+      user: index(db.users),
+      plan: index(db.plans),
+      product: index(db.products),
+      tax: index(db.taxes),
+      sub: index(db.subscriptions),
+      invoice: index(db.invoices),
+    }),
     [db.users, db.plans, db.products, db.taxes, db.subscriptions, db.invoices],
   );
   const me = useMemo(() => by.user.get(db.sessionUserId ?? '') ?? null, [by, db.sessionUserId]);
@@ -48,16 +55,24 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (me?.role === 'customer')
       return {
         subscriptions: db.subscriptions.filter((s) => s.customerId === me.id),
-        invoices: db.invoices.filter((i) => i.customerId === me.id && (i.status === 'confirmed' || i.status === 'paid')),
+        invoices: db.invoices.filter(
+          (i) => i.customerId === me.id && (i.status === 'confirmed' || i.status === 'paid'),
+        ),
       };
     return { subscriptions: db.subscriptions, invoices: db.invoices };
   }, [db.subscriptions, db.invoices, me]);
 
   const value = useMemo<Store>(
     () => ({
-      db, me, by, scope, update,
+      db,
+      me,
+      by,
+      scope,
+      update,
       login: (email, password) => {
-        const u = ref.current.users.find((x) => x.email.toLowerCase() === email.trim().toLowerCase() && x.password === password);
+        const u = ref.current.users.find(
+          (x) => x.email.toLowerCase() === email.trim().toLowerCase() && x.password === password,
+        );
         if (!u) throw new Error('Invalid email or password.');
         update((d) => ({ ...d, sessionUserId: u.id }));
       },
@@ -68,10 +83,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         }),
       logout: () => update((d) => ({ ...d, sessionUserId: null })),
       requestReset: (email) => {
-        const u = ref.current.users.find((x) => x.email.toLowerCase() === email.trim().toLowerCase());
+        const u = ref.current.users.find(
+          (x) => x.email.toLowerCase() === email.trim().toLowerCase(),
+        );
         if (!u) return null; // the UI says the same thing either way
         const token = uid() + uid();
-        update((d) => ({ ...d, resetTokens: [...d.resetTokens.filter((t) => t.userId !== u.id), { token, userId: u.id, expires: Date.now() + 3_600_000 }] }));
+        update((d) => ({
+          ...d,
+          resetTokens: [
+            ...d.resetTokens.filter((t) => t.userId !== u.id),
+            { token, userId: u.id, expires: Date.now() + 3_600_000 },
+          ],
+        }));
         return token;
       },
       resetPassword: (token, password) => {

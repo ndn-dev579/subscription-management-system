@@ -1,4 +1,15 @@
-import type { Db, Discount, Invoice, InvoiceLine, Period, Plan, PlanStatus, Product, Subscription, Tax } from '../types';
+import type {
+  Db,
+  Discount,
+  Invoice,
+  InvoiceLine,
+  Period,
+  Plan,
+  PlanStatus,
+  Product,
+  Subscription,
+  Tax,
+} from '../types';
 import { TERMS } from '../types';
 import { addDays, addPeriod, formatDate, todayISO, uid } from './format';
 
@@ -27,12 +38,22 @@ export const monthlyRecurring = (s: Subscription, plan?: Plan) =>
 /* ---------- invoice generation ---------- */
 
 interface Row {
-  description: string; productId: string; qty: number; unitPrice: number;
-  gross: number; discount: number; taxId: string;
+  description: string;
+  productId: string;
+  qty: number;
+  unitPrice: number;
+  gross: number;
+  discount: number;
+  taxId: string;
 }
 interface Ctx {
-  products: Map<string, Product>; taxes: Map<string, Tax>; plans: Map<string, Plan>;
-  discounts: Discount[]; keys: Set<string>; counter: number; out: Invoice[];
+  products: Map<string, Product>;
+  taxes: Map<string, Tax>;
+  plans: Map<string, Plan>;
+  discounts: Discount[];
+  keys: Set<string>;
+  counter: number;
+  out: Invoice[];
 }
 
 const key = (subId: string, start: string) => `${subId}|${start}`;
@@ -42,10 +63,16 @@ function makeCtx(db: Db): Ctx {
     products: new Map(db.products.map((p): [string, Product] => [p.id, p])),
     taxes: new Map(db.taxes.map((t): [string, Tax] => [t.id, t])),
     plans: new Map(db.plans.map((p): [string, Plan] => [p.id, p])),
-    discounts: db.discounts.map((d) => ({ ...d })).sort((a, b) => a.startDate.localeCompare(b.startDate)),
+    discounts: db.discounts
+      .map((d) => ({ ...d }))
+      .sort((a, b) => a.startDate.localeCompare(b.startDate)),
     // One invoice per (subscription, period). Cancelled invoices free their period again,
     // so a period is never billed twice and never silently skipped.
-    keys: new Set(db.invoices.filter((i) => i.status !== 'cancelled').map((i) => key(i.subscriptionId, i.periodStart))),
+    keys: new Set(
+      db.invoices
+        .filter((i) => i.status !== 'cancelled')
+        .map((i) => key(i.subscriptionId, i.periodStart)),
+    ),
     counter: db.counters.invoice,
     out: [],
   };
@@ -61,7 +88,11 @@ function nextPeriod(ctx: Ctx, sub: Subscription, plan: Plan): string {
 
 export function nextBillingDate(sub: Subscription, plan: Plan | undefined, invoices: Invoice[]) {
   if (!plan) return '';
-  const taken = new Set(invoices.filter((i) => i.subscriptionId === sub.id && i.status !== 'cancelled').map((i) => i.periodStart));
+  const taken = new Set(
+    invoices
+      .filter((i) => i.subscriptionId === sub.id && i.status !== 'cancelled')
+      .map((i) => i.periodStart),
+  );
   for (let k = 0; k < 5000; k++) {
     const start = addPeriod(sub.startDate, plan.period, k);
     if (!taken.has(start)) return start;
@@ -70,7 +101,8 @@ export function nextBillingDate(sub: Subscription, plan: Plan | undefined, invoi
 }
 
 const discountUsable = (d: Discount, subId: string, date: string) =>
-  d.startDate <= date && (!d.endDate || date <= d.endDate) &&
+  d.startDate <= date &&
+  (!d.endDate || date <= d.endDate) &&
   (d.usageLimit === 0 || d.used < d.usageLimit) &&
   (d.subscriptionIds.length === 0 || d.subscriptionIds.includes(subId));
 
@@ -78,14 +110,27 @@ function billPeriod(ctx: Ctx, sub: Subscription, plan: Plan, periodStart: string
   const issueDate = periodStart;
   const rows: Row[] = [];
   if (plan.price > 0)
-    rows.push({ description: `Plan: ${plan.name}`, productId: '', qty: 1, unitPrice: plan.price, gross: plan.price, discount: 0, taxId: plan.taxId });
+    rows.push({
+      description: `Plan: ${plan.name}`,
+      productId: '',
+      qty: 1,
+      unitPrice: plan.price,
+      gross: plan.price,
+      discount: 0,
+      taxId: plan.taxId,
+    });
   for (const l of sub.lines) {
     const p = ctx.products.get(l.productId);
     if (!p) continue;
     const v = p.variants.find((x) => x.id === l.variantId);
     rows.push({
       description: v ? `${p.name} (${v.attribute}: ${v.value})` : p.name,
-      productId: p.id, qty: l.qty, unitPrice: l.unitPrice, gross: round2(l.qty * l.unitPrice), discount: 0, taxId: p.taxId,
+      productId: p.id,
+      qty: l.qty,
+      unitPrice: l.unitPrice,
+      gross: round2(l.qty * l.unitPrice),
+      discount: 0,
+      taxId: p.taxId,
     });
   }
 
@@ -93,7 +138,10 @@ function billPeriod(ctx: Ctx, sub: Subscription, plan: Plan, periodStart: string
   const applied: Invoice['discounts'] = [];
   for (const d of ctx.discounts) {
     if (!discountUsable(d, sub.id, issueDate)) continue;
-    const targets = rows.filter((r) => d.scope === 'subscription' || (r.productId !== '' && d.productIds.includes(r.productId)));
+    const targets = rows.filter(
+      (r) =>
+        d.scope === 'subscription' || (r.productId !== '' && d.productIds.includes(r.productId)),
+    );
     const base = sum(targets.map((r) => r.gross - r.discount));
     const qty = sum(targets.map((r) => r.qty));
     if (base <= 0 || base < d.minPurchase || qty < d.minQty) continue;
@@ -101,7 +149,10 @@ function billPeriod(ctx: Ctx, sub: Subscription, plan: Plan, periodStart: string
     let given = 0;
     targets.forEach((r, i) => {
       const room = r.gross - r.discount;
-      const share = i === targets.length - 1 ? Math.min(room, round2(total - given)) : round2((total * room) / base);
+      const share =
+        i === targets.length - 1
+          ? Math.min(room, round2(total - given))
+          : round2((total * room) / base);
       r.discount = round2(r.discount + share);
       given = round2(given + share);
     });
@@ -114,8 +165,15 @@ function billPeriod(ctx: Ctx, sub: Subscription, plan: Plan, periodStart: string
     const net = round2(r.gross - r.discount);
     const rate = tax?.rate ?? 0;
     return {
-      description: r.description, productId: r.productId, qty: r.qty, unitPrice: r.unitPrice,
-      discount: r.discount, taxName: tax?.name ?? '', taxRate: rate, net, tax: round2((net * rate) / 100),
+      description: r.description,
+      productId: r.productId,
+      qty: r.qty,
+      unitPrice: r.unitPrice,
+      discount: r.discount,
+      taxName: tax?.name ?? '',
+      taxRate: rate,
+      net,
+      tax: round2((net * rate) / 100),
     };
   });
   const subtotal = round2(sum(rows.map((r) => r.gross)));
@@ -123,12 +181,23 @@ function billPeriod(ctx: Ctx, sub: Subscription, plan: Plan, periodStart: string
   const taxTotal = round2(sum(lines.map((l) => l.tax)));
   ctx.counter += 1;
   const inv: Invoice = {
-    id: uid(), number: `INV-${String(ctx.counter).padStart(5, '0')}`,
-    subscriptionId: sub.id, customerId: sub.customerId,
-    periodStart, periodEnd: addDays(addPeriod(periodStart, plan.period, 1), -1),
-    issueDate, dueDate: addDays(issueDate, TERMS[sub.terms].days),
-    status: 'draft', lines, discounts: applied,
-    subtotal, discountTotal, taxTotal, total: round2(subtotal - discountTotal + taxTotal), paid: 0, sent: false,
+    id: uid(),
+    number: `INV-${String(ctx.counter).padStart(5, '0')}`,
+    subscriptionId: sub.id,
+    customerId: sub.customerId,
+    periodStart,
+    periodEnd: addDays(addPeriod(periodStart, plan.period, 1), -1),
+    issueDate,
+    dueDate: addDays(issueDate, TERMS[sub.terms].days),
+    status: 'draft',
+    lines,
+    discounts: applied,
+    subtotal,
+    discountTotal,
+    taxTotal,
+    total: round2(subtotal - discountTotal + taxTotal),
+    paid: 0,
+    sent: false,
   };
   ctx.keys.add(key(sub.id, periodStart));
   ctx.out.push(inv);
@@ -175,8 +244,10 @@ export function generateInvoice(db: Db, subId: string, today = todayISO()): Db {
   const plan = ctx.plans.get(sub.planId);
   if (!plan) throw new Error('Plan not found.');
   const start = nextPeriod(ctx, sub, plan);
-  if (start > sub.expiryDate) throw new Error('Every period up to the expiry date is already invoiced.');
-  if (start > today) throw new Error(`The next period starts on ${formatDate(start)}; nothing is due yet.`);
+  if (start > sub.expiryDate)
+    throw new Error('Every period up to the expiry date is already invoiced.');
+  if (start > today)
+    throw new Error(`The next period starts on ${formatDate(start)}; nothing is due yet.`);
   billPeriod(ctx, sub, plan, start);
   return finish(db, ctx);
 }

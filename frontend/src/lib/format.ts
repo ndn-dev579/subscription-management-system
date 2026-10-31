@@ -5,9 +5,11 @@ export const formatMoney = (n: number) => money.format(n);
 
 const pad = (n: number) => String(n).padStart(2, '0');
 const parse = (iso: string) => new Date(`${iso}T00:00:00Z`);
-const toISO = (d: Date) => `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
+const toISO = (d: Date) =>
+  `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
 
-export const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
+export const uid = () =>
+  Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
 
 export function todayISO() {
   const d = new Date();
@@ -34,14 +36,23 @@ export function addPeriod(iso: string, period: Period, n = 1) {
   return toISO(d);
 }
 
-export const diffDays = (a: string, b: string) => Math.round((parse(a).getTime() - parse(b).getTime()) / 86_400_000);
+export const diffDays = (a: string, b: string) =>
+  Math.round((parse(a).getTime() - parse(b).getTime()) / 86_400_000);
 export const monthKey = (iso: string) => iso.slice(0, 7);
 export const minISO = (a: string, b: string) => (a < b ? a : b);
 
 export const formatDate = (iso: string) =>
-  iso ? parse(iso).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC' }) : '—';
+  iso
+    ? parse(iso).toLocaleDateString('en-IN', {
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric',
+        timeZone: 'UTC',
+      })
+    : '—';
 
 const TERM_COUNT: Record<Period, number> = { daily: 90, weekly: 26, monthly: 12, yearly: 2 };
-export const defaultExpiry = (start: string, period: Period) => addPeriod(start, period, TERM_COUNT[period]);
+export const defaultExpiry = (start: string, period: Period) =>
+  addPeriod(start, period, TERM_COUNT[period]);
 
 export const who = (u?: User) => (u ? (u.company ? `${u.company} · ${u.name}` : u.name) : '—');

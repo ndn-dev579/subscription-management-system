@@ -1,8 +1,6 @@
 import type { ReactNode } from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
 import Layout from './components/Layout';
-import { useStore } from './store/store';
-import type { Role } from './types';
 import { ForgotPage, LoginPage, ResetPage, SignupPage } from './pages/Auth';
 import Dashboard from './pages/Dashboard';
 import Discounts from './pages/Discounts';
@@ -16,6 +14,8 @@ import SubscriptionDetail from './pages/SubscriptionDetail';
 import Subscriptions from './pages/Subscriptions';
 import Taxes from './pages/Taxes';
 import Templates from './pages/Templates';
+import { useStore } from './store/store';
+import type { Role } from './types';
 
 function Guard({ roles, children }: { roles?: Role[]; children: ReactNode }) {
   const { me } = useStore();
@@ -39,19 +39,74 @@ export default function App() {
       <Route path="/signup" element={<SignupPage />} />
       <Route path="/forgot-password" element={<ForgotPage />} />
       <Route path="/reset-password/:token" element={<ResetPage />} />
-      <Route element={<Guard><Layout /></Guard>}>
+      <Route
+        element={
+          <Guard>
+            <Layout />
+          </Guard>
+        }
+      >
         <Route index element={<Home />} />
         <Route path="subscriptions" element={<Subscriptions />} />
         <Route path="subscriptions/:id" element={<SubscriptionDetail />} />
         <Route path="invoices" element={<Invoices />} />
         <Route path="invoices/:id" element={<InvoiceDetail />} />
-        <Route path="payments" element={<Guard roles={TEAM}><Payments /></Guard>} />
-        <Route path="people" element={<Guard roles={TEAM}><People /></Guard>} />
-        <Route path="products" element={<Guard roles={ADMIN}><Products /></Guard>} />
-        <Route path="plans" element={<Guard roles={ADMIN}><Plans /></Guard>} />
-        <Route path="templates" element={<Guard roles={ADMIN}><Templates /></Guard>} />
-        <Route path="discounts" element={<Guard roles={ADMIN}><Discounts /></Guard>} />
-        <Route path="taxes" element={<Guard roles={ADMIN}><Taxes /></Guard>} />
+        <Route
+          path="payments"
+          element={
+            <Guard roles={TEAM}>
+              <Payments />
+            </Guard>
+          }
+        />
+        <Route
+          path="people"
+          element={
+            <Guard roles={TEAM}>
+              <People />
+            </Guard>
+          }
+        />
+        <Route
+          path="products"
+          element={
+            <Guard roles={ADMIN}>
+              <Products />
+            </Guard>
+          }
+        />
+        <Route
+          path="plans"
+          element={
+            <Guard roles={ADMIN}>
+              <Plans />
+            </Guard>
+          }
+        />
+        <Route
+          path="templates"
+          element={
+            <Guard roles={ADMIN}>
+              <Templates />
+            </Guard>
+          }
+        />
+        <Route
+          path="discounts"
+          element={
+            <Guard roles={ADMIN}>
+              <Discounts />
+            </Guard>
+          }
+        />
+        <Route
+          path="taxes"
+          element={
+            <Guard roles={ADMIN}>
+              <Taxes />
+            </Guard>
+          }
+        />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

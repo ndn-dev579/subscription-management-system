@@ -2,8 +2,12 @@ import { createContext, useContext } from 'react';
 import type { Db, Invoice, Plan, Product, Subscription, Tax, User } from '../types';
 
 export interface Lookups {
-  user: Map<string, User>; plan: Map<string, Plan>; product: Map<string, Product>;
-  tax: Map<string, Tax>; sub: Map<string, Subscription>; invoice: Map<string, Invoice>;
+  user: Map<string, User>;
+  plan: Map<string, Plan>;
+  product: Map<string, Product>;
+  tax: Map<string, Tax>;
+  sub: Map<string, Subscription>;
+  invoice: Map<string, Invoice>;
 }
 
 export interface Store {
