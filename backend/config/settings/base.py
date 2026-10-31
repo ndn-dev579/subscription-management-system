@@ -156,3 +156,10 @@ CELERY_TIMEZONE = TIME_ZONE
 # Email backend
 EMAIL_BACKEND = os.getenv('EMAIL_BACKEND', 'django.core.mail.backends.console.EmailBackend')
 
+
+CELERY_BEAT_SCHEDULE = {
+    'run-recurring-billing-daily': {
+        'task': 'apps.billing.tasks.process_recurring_billing',
+        'schedule': 86400.0,  # runs every 24 hours
+    },
+}

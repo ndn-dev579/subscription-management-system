@@ -41,6 +41,12 @@ class SubscriptionPauseView(APIView):
 
     def post(self, request, id):
         sub = generics.get_object_or_404(Subscription, id=id)
+        if not (request.user.is_admin or request.user.is_staff_member):
+            if sub.customer.user_id != request.user.id:
+                return Response(
+                    {'error': {'code': 'permission_denied', 'message': 'You do not have access to this subscription.'}},
+                    status=status.HTTP_403_FORBIDDEN
+                )
         if not sub.allow_pause:
             return Response({'error': {'code': 'not_allowed', 'message': 'Plan does not allow pausing.'}}, status=status.HTTP_400_BAD_REQUEST)
         if sub.status != SubscriptionStatus.ACTIVE:
@@ -55,6 +61,12 @@ class SubscriptionResumeView(APIView):
 
     def post(self, request, id):
         sub = generics.get_object_or_404(Subscription, id=id)
+        if not (request.user.is_admin or request.user.is_staff_member):
+            if sub.customer.user_id != request.user.id:
+                return Response(
+                    {'error': {'code': 'permission_denied', 'message': 'You do not have access to this subscription.'}},
+                    status=status.HTTP_403_FORBIDDEN
+                )
         if sub.status != SubscriptionStatus.PAUSED:
             return Response({'error': {'code': 'invalid_state', 'message': f'Subscription is not paused (status: {sub.status}).'}}, status=status.HTTP_409_CONFLICT)
         
@@ -67,6 +79,12 @@ class SubscriptionRenewView(APIView):
 
     def post(self, request, id):
         sub = generics.get_object_or_404(Subscription, id=id)
+        if not (request.user.is_admin or request.user.is_staff_member):
+            if sub.customer.user_id != request.user.id:
+                return Response(
+                    {'error': {'code': 'permission_denied', 'message': 'You do not have access to this subscription.'}},
+                    status=status.HTTP_403_FORBIDDEN
+                )
         if not sub.allow_renewal:
             return Response({'error': {'code': 'not_allowed', 'message': 'Plan does not allow renewal.'}}, status=status.HTTP_400_BAD_REQUEST)
         
@@ -83,6 +101,12 @@ class SubscriptionCloseView(APIView):
 
     def post(self, request, id):
         sub = generics.get_object_or_404(Subscription, id=id)
+        if not (request.user.is_admin or request.user.is_staff_member):
+            if sub.customer.user_id != request.user.id:
+                return Response(
+                    {'error': {'code': 'permission_denied', 'message': 'You do not have access to this subscription.'}},
+                    status=status.HTTP_403_FORBIDDEN
+                )
         reason = request.data.get('reason', '').strip()
         if not reason:
             return Response({'error': {'code': 'reason_required', 'message': 'A closure reason is required.'}}, status=status.HTTP_400_BAD_REQUEST)
@@ -92,4 +116,3 @@ class SubscriptionCloseView(APIView):
         sub.closed_at = timezone.now()
         sub.save(update_fields=['status', 'close_reason', 'closed_at'])
         return Response({'message': 'Subscription closed.', 'status': sub.status}, status=status.HTTP_200_OK)
-

@@ -1,26 +1,97 @@
-import { variantPrice } from '../lib/billing';
+import { useQuery } from '@tanstack/react-query';
+import { productsApi } from '../lib/api';
 import { formatMoney } from '../lib/format';
-import { useStore } from '../store/store';
-import type { SubLine } from '../types';
+
+export interface ProductVariantItem {
+  id: string;
+  attribute: string;
+  value: string;
+  extra_price: string | number;
+}
+
+export interface ProductOption {
+  id: string;
+  name: string;
+  sales_price: string | number;
+  variants: ProductVariantItem[];
+}
+
+export interface LineDraft {
+  product: string;
+  variant?: string;
+  qty: number;
+  unit_price: string | number;
+}
 
 export default function LinesEditor({
   lines,
   onChange,
-  minQty,
+  minQty = 1,
 }: {
-  lines: SubLine[];
-  onChange: (l: SubLine[]) => void;
-  minQty: number;
+  lines: LineDraft[];
+  onChange: (l: LineDraft[]) => void;
+  minQty?: number;
 }) {
-  const { db, by } = useStore();
-  const patch = (i: number, p: Partial<SubLine>) =>
+  const { data: products = [] } = useQuery({
+    queryKey: ['products'],
+    queryFn: () =>
+      productsApi.list().then((r) => {
+        const d = r.data;
+        return (d.results ?? d) as ProductOption[];
+      }),
+  });
+
+  const productMap = new Map(products.map((p) => [p.id, p]));
+
+  const patch = (i: number, p: Partial<LineDraft>) =>
     onChange(lines.map((l, k) => (k === i ? { ...l, ...p } : l)));
+
   const pick = (i: number, productId: string, variantId = '') => {
-    const prod = by.product.get(productId);
-    patch(i, { productId, variantId, unitPrice: prod ? variantPrice(prod, variantId) : 0 });
+    const prod = productMap.get(productId);
+    const variant = prod?.variants?.find((v) => v.id === variantId);
+    const extra = variant ? Number(variant.extra_price) : 0;
+    const base = prod ? Number(prod.sales_price) : 0;
+    patch(i, {
+      product: productId,
+      variant: variantId || undefined,
+      unit_price: base + extra,
+    });
   };
+
+  const addLine = () => {
+    if (products.length === 0) return;
+    const first = products[0];
+    onChange([
+      ...lines,
+      {
+        product: first.id,
+        variant: undefined,
+        qty: minQty,
+        unit_price: Number(first.sales_price),
+      },
+    ]);
+  };
+
+  const removeLine = (i: number) => {
+    onChange(lines.filter((_, k) => k !== i));
+  };
+
   return (
     <div className="lines">
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          marginBottom: '0.5rem',
+        }}
+      >
+        <strong>Product Lines & Quantities</strong>
+        <button type="button" className="btn btn-ghost" onClick={addLine}>
+          + Add line
+        </button>
+      </div>
+
       <div className="line line-head">
         <span>Product</span>
         <span>Variant</span>
@@ -28,30 +99,33 @@ export default function LinesEditor({
         <span>Unit price</span>
         <span />
       </div>
+
       {lines.map((l, i) => {
-        const prod = by.product.get(l.productId);
+        const prod = productMap.get(l.product);
         return (
           <div className="line" key={i}>
-            <select value={l.productId} onChange={(e) => pick(i, e.target.value)}>
+            <select value={l.product} onChange={(e) => pick(i, e.target.value)}>
               <option value="">Select product…</option>
-              {db.products.map((p) => (
+              {products.map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.name}
                 </option>
               ))}
             </select>
-            {prod && prod.variants.length > 0 ? (
-              <select value={l.variantId} onChange={(e) => pick(i, l.productId, e.target.value)}>
+
+            {prod && prod.variants?.length > 0 ? (
+              <select value={l.variant ?? ''} onChange={(e) => pick(i, l.product, e.target.value)}>
                 <option value="">Standard</option>
                 {prod.variants.map((v) => (
                   <option key={v.id} value={v.id}>
-                    {v.attribute}: {v.value} (+{formatMoney(v.extraPrice)})
+                    {v.attribute}: {v.value} (+{formatMoney(Number(v.extra_price))})
                   </option>
                 ))}
               </select>
             ) : (
               <span className="muted small">—</span>
             )}
+
             <input
               type="number"
               min={minQty}
@@ -59,32 +133,20 @@ export default function LinesEditor({
               value={l.qty}
               onChange={(e) => patch(i, { qty: Number(e.target.value) })}
             />
+
             <input
               type="number"
-              min="0"
               step="0.01"
-              value={l.unitPrice}
-              onChange={(e) => patch(i, { unitPrice: Number(e.target.value) })}
+              value={l.unit_price}
+              onChange={(e) => patch(i, { unit_price: Number(e.target.value) })}
             />
-            <button
-              type="button"
-              className="btn btn-danger"
-              onClick={() => onChange(lines.filter((_, k) => k !== i))}
-            >
+
+            <button type="button" className="btn btn-danger" onClick={() => removeLine(i)}>
               ✕
             </button>
           </div>
         );
       })}
-      <button
-        type="button"
-        className="btn btn-ghost"
-        onClick={() =>
-          onChange([...lines, { productId: '', variantId: '', qty: minQty, unitPrice: 0 }])
-        }
-      >
-        + Add line
-      </button>
     </div>
   );
 }

@@ -1,158 +1,164 @@
+import { useMutation, useQuery } from '@tanstack/react-query';
+import type { AxiosError } from 'axios';
 import { type FormEvent, useState } from 'react';
-import { saveSubscription } from '../lib/actions';
-import { planBookable, recurringAmount } from '../lib/billing';
-import { addDays, defaultExpiry, formatMoney, todayISO, uid } from '../lib/format';
-import { useAction } from '../lib/hooks';
-import { useStore } from '../store/store';
-import { type Subscription, TERMS, type TermsKey } from '../types';
-import LinesEditor from './LinesEditor';
+import { customersApi, plansApi, subscriptionsApi } from '../lib/api';
+import { queryClient } from '../lib/queryClient';
+import LinesEditor, { type LineDraft } from './LinesEditor';
 import { ErrorBanner, Field, Modal } from './ui';
 
-export default function SubscriptionForm({
-  initial,
-  onClose,
-}: {
-  initial?: Subscription;
-  onClose: () => void;
-}) {
-  const { db, by, update } = useStore();
-  const { error, run } = useAction();
-  const today = todayISO();
-  const [f, setF] = useState<Subscription>(
-    initial ?? {
-      id: uid(),
-      number: '',
-      customerId: '',
-      planId: '',
-      startDate: today,
-      expiryDate: defaultExpiry(today, 'monthly'),
-      terms: 'net30',
-      status: 'draft',
-      lines: [],
-      quoteValidUntil: addDays(today, 30),
-      createdAt: today,
-    },
-  );
-  const set = <K extends keyof Subscription>(k: K, v: Subscription[K]) =>
-    setF((x) => ({ ...x, [k]: v }));
-  const plan = by.plan.get(f.planId);
-  const plans = db.plans.filter((p) => p.id === f.planId || planBookable(p, today));
+interface CustomerItem {
+  id: string;
+  customer_number: string;
+  company_name: string;
+  contact_name: string;
+}
 
-  const applyTemplate = (id: string) => {
-    const t = db.templates.find((x) => x.id === id);
-    if (!t) return;
-    const p = by.plan.get(t.planId);
-    setF((x) => ({
-      ...x,
-      planId: t.planId,
-      lines: t.lines.map((l) => ({ ...l })),
-      quoteValidUntil: addDays(today, t.validityDays),
-      expiryDate: p ? defaultExpiry(x.startDate, p.period) : x.expiryDate,
-    }));
-  };
-  const applyPlan = (id: string) => {
-    const p = by.plan.get(id);
-    setF((x) => ({
-      ...x,
-      planId: id,
-      expiryDate: p ? defaultExpiry(x.startDate, p.period) : x.expiryDate,
-    }));
-  };
+interface PlanItem {
+  id: string;
+  name: string;
+  minimum_quantity: number;
+}
+
+export default function SubscriptionForm({ onClose }: { onClose: () => void }) {
+  const [customer, setCustomer] = useState('');
+  const [plan, setPlan] = useState('');
+  const [startDate, setStartDate] = useState(new Date().toISOString().slice(0, 10));
+  const [expiryDate, setExpiryDate] = useState(
+    new Date(Date.now() + 365 * 86400000).toISOString().slice(0, 10),
+  );
+  const [paymentTerms, setPaymentTerms] = useState('net30');
+  const [lines, setLines] = useState<LineDraft[]>([]);
+  const [error, setError] = useState('');
+
+  const { data: customers = [] } = useQuery({
+    queryKey: ['customers'],
+    queryFn: () =>
+      customersApi.list().then((r) => {
+        const d = r.data;
+        return (d.results ?? d) as CustomerItem[];
+      }),
+  });
+
+  const { data: plans = [] } = useQuery({
+    queryKey: ['plans'],
+    queryFn: () =>
+      plansApi.list().then((r) => {
+        const d = r.data;
+        return (d.results ?? d) as PlanItem[];
+      }),
+  });
+
+  const selectedPlan = plans.find((p) => p.id === plan);
+
+  const createMutation = useMutation({
+    mutationFn: (payload: Record<string, unknown>) => subscriptionsApi.create(payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['subscriptions'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+      onClose();
+    },
+    onError: (err) => {
+      const e = err as AxiosError<{ detail?: string }>;
+      setError(e.response?.data?.detail ?? e.message);
+    },
+  });
+
   const submit = (e: FormEvent) => {
     e.preventDefault();
-    run(() => {
-      update((d) => saveSubscription(d, f));
-      onClose();
-    });
+    if (!customer) {
+      setError('Please select a customer.');
+      return;
+    }
+    if (!plan) {
+      setError('Please select a plan.');
+      return;
+    }
+    setError('');
+
+    const payload = {
+      customer,
+      plan,
+      start_date: startDate,
+      expiry_date: expiryDate,
+      payment_terms: paymentTerms,
+      lines: lines.map((l) => ({
+        product: l.product,
+        variant: l.variant || null,
+        qty: Number(l.qty),
+        unit_price: String(l.unit_price),
+      })),
+    };
+    createMutation.mutate(payload);
   };
 
   return (
-    <Modal title={initial ? `Edit ${initial.number}` : 'New subscription'} onClose={onClose} wide>
+    <Modal title="New Subscription" onClose={onClose} wide>
       <form className="form" onSubmit={submit}>
-        {!initial && (
-          <Field label="Start from a quotation template (optional)">
-            <select defaultValue="" onChange={(e) => applyTemplate(e.target.value)}>
-              <option value="">— build from scratch —</option>
-              {db.templates.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name} · valid {t.validityDays} days
-                </option>
-              ))}
-            </select>
-          </Field>
-        )}
         <div className="form-grid">
           <Field label="Customer">
-            <select value={f.customerId} onChange={(e) => set('customerId', e.target.value)}>
-              <option value="">Select customer…</option>
-              {db.users
-                .filter((u) => u.role === 'customer')
-                .map((u) => (
-                  <option key={u.id} value={u.id}>
-                    {u.company || u.name} ({u.email})
-                  </option>
-                ))}
+            <select value={customer} onChange={(e) => setCustomer(e.target.value)} required>
+              <option value="">Select Customer…</option>
+              {customers.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.company_name || c.contact_name} ({c.customer_number})
+                </option>
+              ))}
             </select>
           </Field>
-          <Field
-            label="Plan"
-            hint={plan ? `Billed ${plan.period} · minimum quantity ${plan.minQty}` : undefined}
-          >
-            <select value={f.planId} onChange={(e) => applyPlan(e.target.value)}>
-              <option value="">Select plan…</option>
+
+          <Field label="Plan">
+            <select value={plan} onChange={(e) => setPlan(e.target.value)} required>
+              <option value="">Select Plan…</option>
               {plans.map((p) => (
                 <option key={p.id} value={p.id}>
-                  {p.name} ({formatMoney(p.price)} / {p.period})
+                  {p.name}
                 </option>
               ))}
             </select>
           </Field>
-          <Field label="Start date">
+
+          <Field label="Start Date">
             <input
               type="date"
-              value={f.startDate}
-              onChange={(e) => set('startDate', e.target.value)}
+              value={startDate}
+              onChange={(e) => setStartDate(e.target.value)}
+              required
             />
           </Field>
-          <Field label="Expiry date">
+
+          <Field label="Expiry Date">
             <input
               type="date"
-              value={f.expiryDate}
-              onChange={(e) => set('expiryDate', e.target.value)}
+              value={expiryDate}
+              onChange={(e) => setExpiryDate(e.target.value)}
+              required
             />
           </Field>
-          <Field label="Payment terms">
-            <select value={f.terms} onChange={(e) => set('terms', e.target.value as TermsKey)}>
-              {Object.entries(TERMS).map(([k, v]) => (
-                <option key={k} value={k}>
-                  {v.label}
-                </option>
-              ))}
+
+          <Field label="Payment Terms">
+            <select value={paymentTerms} onChange={(e) => setPaymentTerms(e.target.value)}>
+              <option value="immediate">Immediate</option>
+              <option value="net15">Net 15</option>
+              <option value="net30">Net 30</option>
+              <option value="net60">Net 60</option>
             </select>
-          </Field>
-          <Field label="Quotation valid until">
-            <input
-              type="date"
-              value={f.quoteValidUntil}
-              onChange={(e) => set('quoteValidUntil', e.target.value)}
-            />
           </Field>
         </div>
-        <strong>Product lines</strong>
-        <LinesEditor lines={f.lines} onChange={(l) => set('lines', l)} minQty={plan?.minQty ?? 1} />
-        {plan && f.lines.length > 0 && (
-          <p className="muted small">
-            Recurring amount per {plan.period.replace('ly', '')} period, excl. tax:{' '}
-            <strong>{formatMoney(recurringAmount(f, plan))}</strong> (includes plan fee)
-          </p>
-        )}
-        <ErrorBanner error={error} />
+
+        <LinesEditor
+          lines={lines}
+          onChange={setLines}
+          minQty={selectedPlan?.minimum_quantity ?? 1}
+        />
+
+        {error && <ErrorBanner error={error} />}
+
         <div className="modal-actions">
           <button type="button" className="btn btn-ghost" onClick={onClose}>
             Cancel
           </button>
-          <button type="submit" className="btn btn-primary">
-            Save
+          <button type="submit" className="btn btn-primary" disabled={createMutation.isPending}>
+            {createMutation.isPending ? 'Creating…' : 'Create Subscription'}
           </button>
         </div>
       </form>

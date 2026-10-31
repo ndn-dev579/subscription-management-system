@@ -70,6 +70,7 @@ class InvoicePdfView(APIView):
 
     def get(self, request, id):
         inv = generics.get_object_or_404(Invoice, id=id)
+        self.check_object_permissions(request, inv)
         content = f"""
 ============================================================
               BRIGHTLOOP SOFTWARE - INVOICE
@@ -100,4 +101,3 @@ OUTSTANDING:    INR {inv.outstanding_amount}
         response = HttpResponse(content, content_type='text/plain; charset=utf-8')
         response['Content-Disposition'] = f'attachment; filename="{inv.invoice_number}.txt"'
         return response
-

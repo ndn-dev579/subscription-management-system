@@ -2,6 +2,7 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import type { AxiosError } from 'axios';
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
+import SubscriptionForm from '../components/SubscriptionForm';
 import { ErrorBanner, PageHead, Pager, StatusBadge } from '../components/ui';
 import { useAuth } from '../contexts/AuthContext';
 import { subscriptionsApi } from '../lib/api';
@@ -43,6 +44,7 @@ export default function Subscriptions() {
   const { me } = useAuth();
   const [q, setQ] = useState('');
   const [status, setStatus] = useState('');
+  const [creating, setCreating] = useState(false);
   const isCustomer = me?.role === 'customer';
 
   const { data, isLoading, error } = useQuery({
@@ -99,8 +101,16 @@ export default function Subscriptions() {
       <PageHead
         title={isCustomer ? 'My subscriptions' : 'Subscriptions'}
         sub={`${(data ?? []).length.toLocaleString()} total`}
-      />
+      >
+        {!isCustomer && (
+          <button type="button" className="btn btn-primary" onClick={() => setCreating(true)}>
+            + New subscription
+          </button>
+        )}
+      </PageHead>
+
       {actionError && <ErrorBanner error={actionError} />}
+
       <div className="toolbar">
         <input
           placeholder="Search number or customer…"
@@ -114,6 +124,7 @@ export default function Subscriptions() {
           ))}
         </select>
       </div>
+
       <div className="card table-wrap">
         {isLoading ? (
           <p className="muted" style={{ padding: '1rem' }}>
@@ -196,7 +207,10 @@ export default function Subscriptions() {
           </table>
         )}
       </div>
+
       <Pager {...pg} />
+
+      {creating && <SubscriptionForm onClose={() => setCreating(false)} />}
     </>
   );
 }
